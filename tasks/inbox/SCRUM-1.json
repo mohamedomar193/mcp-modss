@@ -1,0 +1,23 @@
+{
+  "id": "SCRUM-1",
+  "source": "jira",
+  "title": "Login session expires too early",
+  "instructions": "1) Identify how sessions/authentication are implemented (express-session cookie sessions or JWT tokens). Search for session or auth config in the backend (examples: sessionMiddleware.js, session.js, auth.js, tokenService.js, config.js, server.js). 2) If using cookie sessions (express-session or similar):\n   a) Update session cookie timeout to 30 minutes (30 * 60 * 1000 ms). Set cookie.maxAge = 1800000.  \n   b) Enable sliding/rolling sessions so activity resets the timeout: set rolling: true or call req.session.touch() on authenticated requests.  \n   c) Ensure session store persistence (e.g. redis / db) honors maxAge and rolling settings.  \n3) If using JWT access tokens: \n   a) Change access token expiration to 30 minutes and/or update refresh token flow so the user remains logged in for 30 minutes of inactivity.  \n   b) To implement sliding expiration for JWT, issue a new access token on authenticated requests when remaining TTL is below a threshold (or use refresh token endpoint automatically on page refresh).  \n4) Verify that the session cookie flags (HttpOnly, Secure, SameSite) and domain/path settings allow the browser to send the cookie on page refresh. Do not shorten TTL accidentally.  \n5) Ensure logout flow still fully invalidates the session/token: for cookie sessions call req.session.destroy() and clear cookie; for JWT, revoke/blacklist the token or remove refresh token server-side. Confirm logout endpoint behavior unchanged after modifications.  \n6) Add or update configuration variable (e.g. SESSION_TIMEOUT_MS or AUTH_TOKEN_EXPIRY) and use it in the server config; document default = 1800000 (30 minutes).  \n7) Add automated tests: unit/integration tests that simulate inactivity > 6 minutes and < 30 minutes to verify session persists until 30 minutes and expires after. Add an e2e/manual test case: 1) login, 2) wait 6–7 minutes, 3) refresh page → user remains logged in; 4) wait 31 minutes → user is logged out.  \n8) Manual verification steps for QA: reproduce the original repro (login, wait 6–7 min, refresh page) and confirm user is still logged in; verify logout still logs out immediately.  \n9) Deploy config change and monitor logs/metrics for any session-store errors or increased session retention impact on storage.",
+  "acceptance_criteria": [
+    "Session should last at least 30 minutes of inactivity",
+    "User should remain logged in after refresh within 30 minutes",
+    "Logout still works normally"
+  ],
+  "file_hints": [
+    "sessionMiddleware.js",
+    "session.js",
+    "auth.js",
+    "authMiddleware.js",
+    "tokenService.js",
+    "config.js",
+    "server.js"
+  ],
+  "meta": null,
+  "created_at": "2026-01-27T14:08:33.859641+00:00",
+  "status": "pending"
+}

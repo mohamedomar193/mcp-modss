@@ -1,0 +1,29 @@
+{
+  "id": "SCRUM-1",
+  "source": "jira",
+  "title": "Login session expires too early",
+  "instructions": "1) Identify current session/token expiration mechanism: search codebase for express-session, session store configuration, cookie.maxAge, JWT expiration (exp), and any environment variables like SESSION_TIMEOUT, SESSION_MAX_AGE or JWT_EXP. Likely files: config/session.js, server.js/app.js, middleware/sessionMiddleware.js, auth/jwt.js.\n2) If using express-session or similar cookie-based sessions:\n   a) Update the session timeout value to 30 minutes (30 * 60 * 1000 ms) for cookie.maxAge and for the session store TTL. Replace any existing 5 minute value (5 * 60 * 1000).\n   b) Ensure the session store is touched on activity so the inactivity window is sliding: set express-session option rolling: true or call store.touch() / req.session.touch() on each request as appropriate. Alternatively ensure saveUninitialized/resave settings cooperate with the store to refresh TTL on activity.\n   c) If there is a separate server-side TTL (e.g. Redis session TTL), update it to 30 minutes as well.\n3) If using JWT-based auth:\n   a) Update JWT expiration (exp) to 30 minutes. If you rely on refresh tokens, ensure access token lifetime becomes 30 minutes and refresh behavior remains unchanged.\n   b) Update any refresh logic so that a user who performs requests within 30 minutes does not get forced to re-login.\n4) Add or update an environment variable for configuration (e.g. SESSION_MAX_AGE_MS or SESSION_TIMEOUT_MINUTES) and update .env.example. Use the environment variable in the session/JWT configuration instead of hard-coded values.\n5) Update logout implementation to continue destroying the session or invalidating tokens exactly as before; validate that logout still clears session cookie and deletes server-side session or blacklists token as applicable.\n6) Update/implement automated tests:\n   a) Unit/integration test that simulates login and asserts session/token is valid at 29 minutes and invalid at 31 minutes. Use time-mocking (sinon.useFakeTimers or jest.useFakeTimers) or adjust TTL in test environment to run quickly.\n   b) Test that session is refreshed on activity if sliding expiry is required.\n   c) Test that logout destroys session/token immediately.\n   Place tests under tests/session.test.js or the existing auth test suite.\n7) Update any README or developer docs describing session timeout and environment variables.\n8) Manual QA steps to run before merge: login, wait less than 30 minutes and refresh -> still logged in; wait more than 30 minutes and refresh -> logged out; logout action logs out immediately.\n9) Deploy: ensure the environment variable is set in staging/production and monitor authentication logs for regressions.\n\nImplementation notes:\n- Prefer configuration-driven change (env var) rather than hard-coded numbers.\n- Keep changes limited to configuration and tests; no DB migrations expected.\n- If both cookie sessions and JWTs are used, update both TTLs to keep behavior consistent.",
+  "acceptance_criteria": [
+    "Session should last at least 30 minutes of inactivity",
+    "User should remain logged in after refresh within 30 minutes",
+    "Logout still works normally"
+  ],
+  "file_hints": [
+    "config/session.js",
+    "server.js",
+    "app.js",
+    "middleware/sessionMiddleware.js",
+    "auth/jwt.js",
+    "routes/auth.js",
+    ".env",
+    ".env.example",
+    "tests/session.test.js",
+    "cypress/integration/session_spec.js"
+  ],
+  "meta": null,
+  "created_at": "2026-01-27T12:42:17.487360+00:00",
+  "status": "completed",
+  "started_at": "2026-01-27T12:44:18.774617+00:00",
+  "completed_at": "2026-01-27T12:44:42.530677+00:00",
+  "completion_note": "Flow verification — no code changes."
+}

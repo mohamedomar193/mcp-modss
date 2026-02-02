@@ -1,0 +1,10 @@
+{
+  "id": "JIRA-123",
+  "source": "jira",
+  "title": "Test from n8n",
+  "instructions": "Create a test file or change something small.",
+  "acceptance_criteria": null,
+  "file_hints": null,
+  "meta": null,
+  "created_at": "2026-01-25T14:58:48.952584+00:00"
+}

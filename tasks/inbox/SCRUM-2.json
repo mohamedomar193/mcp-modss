@@ -1,0 +1,18 @@
+{
+  "id": "SCRUM-2",
+  "source": "jira",
+  "title": "[MCP test] Add success marker file to confirm Jira→n8n→Cursor flow",
+  "instructions": "1) From the project root (the same folder that contains package.json or README), create a new file named either MCP_TEST_SUCCESS.txt or MCP_TEST_SUCCESS.md. 2) Put exactly the following text into the file (no additional characters, no extra whitespace, no extra lines):\n\nChanges performed successfully.\n\n3) Save the file as UTF-8 without a BOM. 4) Stage and commit only this new file. Example git commands:\n   - git checkout -b chore/mcp-test-success\n   - git add MCP_TEST_SUCCESS.txt   (or MCP_TEST_SUCCESS.md)\n   - git commit -m \"MCP test: add success marker\"\n   - git push --set-upstream origin chore/mcp-test-success\n5) If your workflow requires it, open a pull request so the change is visible to CI/integration that triggers the Jira → n8n → Cursor flow. Do not modify any other files or code.",
+  "acceptance_criteria": [
+    "A file named MCP_TEST_SUCCESS.txt or MCP_TEST_SUCCESS.md exists in the project root (the same folder as package.json or README).",
+    "The file content is exactly: Changes performed successfully. (no extra characters, no extra whitespace, no extra newline).",
+    "The file is saved with UTF-8 encoding (no BOM)."
+  ],
+  "file_hints": [
+    "MCP_TEST_SUCCESS.txt",
+    "MCP_TEST_SUCCESS.md"
+  ],
+  "meta": null,
+  "created_at": "2026-01-27T14:07:32.056561+00:00",
+  "status": "pending"
+}
