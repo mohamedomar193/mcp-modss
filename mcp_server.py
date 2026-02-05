@@ -1,12 +1,13 @@
 """
-MCP server for Cursor (STDIO transport).
+MCP server for Cursor — HTTP only (e.g. deploy on EC2).
 
-This server exposes MCP tools for task management:
+Exposes MCP tools for task management:
 - Task queue operations (list, get, enqueue, complete, start, fail)
 - Status tracking (pending, in_progress, completed, failed)
 - PostgreSQL-backed task storage (set DATABASE_URL)
 
-Configure Cursor with `.cursor/mcp.json` (see README).
+Run: uvicorn mcp_server:app --host 0.0.0.0 --port 8000
+Cursor connects via url (e.g. http://your-host:8000/mcp).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Any, Literal
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 load_dotenv()
 
@@ -26,7 +28,15 @@ import database
 TaskStatus = Literal["pending", "in_progress", "completed", "failed"]
 DEFAULT_STATUS: TaskStatus = database.DEFAULT_STATUS
 
-mcp = FastMCP("local-codegen")
+# Disable DNS rebinding protection so any Host is accepted (e.g. behind nginx / proxy).
+# json_response=True: server only requires Accept: application/json (not text/event-stream).
+# stateless_http=True: no session ID required (each request is independent; works with Cursor).
+mcp = FastMCP(
+    "local-codegen",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    json_response=True,
+    stateless_http=True,
+)
 
 
 def _now_id() -> str:
@@ -154,6 +164,5 @@ async def fail_task(task_id: str, *, reason: str | None = None) -> str:
     )
 
 
-if __name__ == "__main__":
-    # STDIO transport: Cursor launches this process and talks MCP over stdin/stdout.
-    mcp.run()
+# ASGI app for HTTP deployment. Run: uvicorn mcp_server:app --host 0.0.0.0 --port 8000
+app = mcp.streamable_http_app()

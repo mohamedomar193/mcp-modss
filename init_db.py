@@ -2,7 +2,7 @@
 Create the tasks table in PostgreSQL. Run once after setting DATABASE_URL.
 
 Usage:
-    Copy .env.example to .env, set DATABASE_URL, then: python init_db.py
+    Copy env.example to .env, set DATABASE_URL, then: python init_db.py
     Or: set DATABASE_URL=postgresql://user:pass@localhost:5432/mcp_tasks
         python init_db.py
 """

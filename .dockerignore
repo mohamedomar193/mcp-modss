@@ -1,0 +1,35 @@
+# Git and env
+.git
+.gitignore
+.env
+.env.*
+env.example
+
+# Python
+.venv
+venv
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+.mypy_cache
+.ruff_cache
+
+# Project files not needed in the MCP server image
+tasks
+ingest_server.py
+init_db.py
+test_db.py
+test_ingest.py
+ngrok.exe
+.cursor
+*.md
+
+# IDE / OS
+.idea
+.vscode
+*.swp
+.DS_Store
+Thumbs.db

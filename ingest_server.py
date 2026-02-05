@@ -5,6 +5,10 @@ Why separate from MCP stdio server?
 - MCP stdio uses stdin/stdout as the protocol transport. Web server logs on stdout can break it.
 - Run this file as a separate process (uvicorn) alongside Cursor's MCP stdio server.
 
+Run: uvicorn ingest_server:app --host 0.0.0.0 --port 8787
+Then open http://localhost:8787/ or http://127.0.0.1:8787/ in the browser (not http://0.0.0.0:8787/ —
+0.0.0.0 is a bind address, not a URL).
+
 Endpoint:
 - POST /ingest
   - Header: X-Ingest-Token: <secret>

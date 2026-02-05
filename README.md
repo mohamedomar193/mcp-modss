@@ -65,6 +65,18 @@ Cursor can’t be “pushed” a prompt remotely in a fully headless way; instea
 - **MCP server**: exposes tools to list/load/complete tasks (`list_tasks`, `get_task`, `complete_task`).
 - **Cursor (Agent)**: calls `list_tasks` → `get_task` → uses the returned `task.instructions` to generate/apply changes → `complete_task`.
 
+### Deploy MCP server on EC2
+
+Run the MCP server over HTTP on your server (e.g. EC2):
+
+1. **On the server:** set `DATABASE_URL` (and optionally `INGEST_TOKEN`) in the environment, then:
+   ```bash
+   uvicorn mcp_server:app --host 0.0.0.0 --port 8000
+   ```
+   The MCP endpoint is **POST /mcp**. Expose port 8000 (and use HTTPS in front if needed).
+2. **In Cursor:** use **Settings → MCP** and add a server with `url` (e.g. `https://your-ec2/mcp`) and optional `headers` (e.g. `Authorization: Bearer YOUR_API_KEY`).
+
+
 ### n8n HTTP Request node (cloud) — exact config
 
 - **Method**: `POST`
