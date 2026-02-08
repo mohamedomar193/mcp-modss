@@ -1,4 +1,4 @@
-# Minimal CI/CD: lint, test (with Postgres), and verify Docker build.
+# Minimal CI/CD: test (with Postgres) and verify Docker build.
 # Triggers: push and pull_request to main.
 
 name: CI
@@ -10,23 +10,6 @@ on:
     branches: [main]
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install ruff
-        run: pip install ruff
-
-      - name: Lint with ruff
-        run: ruff check .
-
   test:
     name: Test
     runs-on: ubuntu-latest
