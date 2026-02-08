@@ -1,20 +1,34 @@
-# Environment and secrets
+# Git and env
+.git
+.gitignore
 .env
+.env.*
+env.example
 
 # Python
-__pycache__/
+.venv
+venv
+__pycache__
 *.py[cod]
 *.pyo
-.venv/
-venv/
-env/
+*.pyd
+.Python
+*.so
+.mypy_cache
+.ruff_cache
 
-# IDE
-.idea/
-.vscode/
+# Project files not needed in the image
+tasks
+init_db.py
+test_db.py
+test_ingest.py
+ngrok.exe
+.cursor
+*.md
+
+# IDE / OS
+.idea
+.vscode
 *.swp
-*.swo
-
-# OS
 .DS_Store
 Thumbs.db
