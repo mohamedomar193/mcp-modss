@@ -1,16 +1,24 @@
-# MCP server + nginx. Exposes port 80; nginx proxies to the MCP app.
-# Usage: copy env.example to .env, set DATABASE_URL, then:
+# MCP server + ingest + nginx. Exposes port 80; nginx proxies /mcp and /ingest.
+# Usage: copy env.example to .env, set DATABASE_URL and INGEST_TOKEN, then:
 #   docker compose up -d
-# Cursor connects to http://localhost/mcp (or https://your-host/mcp with TLS in front).
+# Cursor: http://localhost/mcp  |  n8n webhook: http://localhost/ingest
 
 services:
   mcp-server:
     build: .
     image: mcp-server:latest
+    command: ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       - DATABASE_URL=${DATABASE_URL}
     restart: unless-stopped
-    # Healthcheck from Dockerfile; no host ports — only nginx talks to this container.
+
+  ingest:
+    image: mcp-server:latest
+    command: ["uvicorn", "ingest_server:app", "--host", "0.0.0.0", "--port", "8787"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - INGEST_TOKEN=${INGEST_TOKEN}
+    restart: unless-stopped
 
   nginx:
     image: nginx:1.25-alpine
@@ -19,6 +27,6 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      mcp-server:
-        condition: service_healthy
+      - mcp-server
+      - ingest
     restart: unless-stopped
