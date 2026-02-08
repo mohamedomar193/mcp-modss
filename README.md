@@ -108,7 +108,7 @@ Run the MCP server over HTTP on your server (e.g. EC2):
 > - prompt: "<my request>"
 > Then, parse the returned JSON. If `ok` is false, stop and ask me what to do next. If `ok` is true, use `code` as the output.
 
-**No guessing**
+**No guessing*
 
 > You must not guess. If the MCP tool output is missing fields or is invalid JSON, retry once with a tighter prompt; if it still fails, stop and ask me.
 
