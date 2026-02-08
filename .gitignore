@@ -1,39 +1,20 @@
-# Git and env
-.git
-.gitignore
+# Environment and secrets
 .env
-.env.*
-env.example
 
 # Python
-.venv
-venv
-__pycache__
+__pycache__/
 *.py[cod]
 *.pyo
-*.pyd
-.Python
-*.so
-.mypy_cache
-.ruff_cache
+.venv/
+venv/
+env/
 
-# Project files not needed in the image
-tasks
-init_db.py
-test_db.py
-test_ingest.py
-ngrok.exe
-.cursor
-*.md
-
-# IDE / OS
-.idea
-.vscode
+# IDE
+.idea/
+.vscode/
 *.swp
+*.swo
+
+# OS
 .DS_Store
 Thumbs.db
-
-# Explicitly include app code (must be in image)
-!mcp_server.py
-!ingest_server.py
-!database.py
