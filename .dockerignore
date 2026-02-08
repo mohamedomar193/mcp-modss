@@ -17,12 +17,8 @@ __pycache__
 .mypy_cache
 .ruff_cache
 
-# Project files not needed in the MCP server image
+# Project files not needed in the image (do NOT list mcp_server.py, ingest_server.py, database.py)
 tasks
-ingest_server.py
-init_db.py
-test_db.py
-test_ingest.py
 ngrok.exe
 .cursor
 *.md
