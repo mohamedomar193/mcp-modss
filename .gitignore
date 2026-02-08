@@ -32,3 +32,8 @@ ngrok.exe
 *.swp
 .DS_Store
 Thumbs.db
+
+# Explicitly include app code (must be in image)
+!mcp_server.py
+!ingest_server.py
+!database.py
