@@ -1,4 +1,4 @@
-## Cursor + MCP (this repo)
+## Cursor + MCP (this repo) 
 
 This repo runs a **local MCP stdio server** that Cursor can call as a tool.
 
