@@ -14,8 +14,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Application code (mcp_server, ingest_server, database; .dockerignore excludes the rest)
-COPY mcp_server.py ingest_server.py database.py llm.py ./
+# Application code (mcp_server, ingest_server, database, init_db; .dockerignore excludes the rest)
+COPY mcp_server.py ingest_server.py database.py llm.py init_db.py ./
 
 # Run as non-root
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
