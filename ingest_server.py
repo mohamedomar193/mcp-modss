@@ -27,7 +27,7 @@ import re
 
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 load_dotenv()
 
@@ -55,29 +55,29 @@ app = FastAPI(title="MCP Ingest Webhook", version="1.0.0")
 
 
 class IngestTask(BaseModel):
-    # Keep this loose: n8n/Jira may add fields; we store whatever arrives.
-    id: str = Field(..., description="Unique identifier, e.g. JIRA-123")
+    """Payload from n8n/HTTP: id, summary, source, description only."""
+    id: str = Field(..., description="Unique identifier, e.g. SCRUM-1")
+    summary: str | None = Field(default=None, description="Short title (Jira summary)")
     source: str | None = Field(default="jira")
-    title: str | None = None
-    instructions: str = Field(..., description="What Cursor should do in the codebase")
+    description: str | None = Field(default=None, description="Full text (Jira description)")
 
+    # Internal: set from summary/description for LLM and DB
+    title: str | None = None
+    instructions: str | None = None
     acceptance_criteria: list[str] | None = None
     file_hints: list[str] | None = None
-
-    # Optional extra structured fields
     meta: dict[str, Any] | None = None
 
-    @field_validator("acceptance_criteria", "file_hints", mode="before")
-    @classmethod
-    def list_or_newline_string(cls, v: Any) -> list[str] | None:
-        """Accept array or newline-separated string (e.g. from n8n Set node)."""
-        if v is None:
-            return None
-        if isinstance(v, list):
-            return [str(x).strip() for x in v if str(x).strip()]
-        if isinstance(v, str):
-            return [line.strip() for line in v.splitlines() if line.strip()]
-        return None
+    @model_validator(mode="after")
+    def map_summary_description_to_title_instructions(self) -> "IngestTask":
+        """Derive title and instructions from summary/description for downstream."""
+        self.title = (self.summary and self.summary.strip()) or self.id
+        self.instructions = (
+            (self.description and self.description.strip())
+            or (self.summary and self.summary.strip())
+            or "No description provided."
+        )
+        return self
 
 
 def _require_token(header_token: str | None) -> None:
@@ -138,8 +138,13 @@ async def ingest(
             except Exception as e:
                 raise HTTPException(status_code=422, detail=f"data was a string but not valid JSON: {e}") from e
 
+    # Accept array from n8n: use first element as the task
+    if isinstance(raw, list):
+        if not raw:
+            raise HTTPException(status_code=422, detail="Expected a non-empty array or a single task object.")
+        raw = raw[0]
     if not isinstance(raw, dict):
-        raise HTTPException(status_code=422, detail="Expected a JSON object (or JSON string) for the task payload.")
+        raise HTTPException(status_code=422, detail="Expected a JSON object or array with task (id, summary, source, description).")
 
     # Validate/normalize into our schema (gives good error messages).
     try:
@@ -147,7 +152,7 @@ async def ingest(
     except Exception as e:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid task payload. Must include at least id (string) and instructions (string). Error: {e}",
+            detail=f"Invalid task payload. Expected id, summary, source, description. Error: {e}",
         ) from e
 
     # Enhance task with LLM (falls back to original data on failure)
