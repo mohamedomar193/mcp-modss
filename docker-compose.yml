@@ -1,15 +1,35 @@
-# MCP server + ingest + nginx. Exposes port 80; nginx proxies /mcp and /ingest.
+# MCP server + Postgres + ingest + nginx. Exposes port 80; nginx proxies /mcp and /ingest.
 # Usage: copy env.example to .env, set DATABASE_URL and INGEST_TOKEN, then:
 #   docker compose up -d
 # Cursor: http://localhost/mcp  |  n8n webhook: http://localhost/ingest
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: mcp_tasks
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mcp_tasks"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
   mcp-server:
     build: .
     image: mcp-server:latest
     command: ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   ingest:
@@ -19,6 +39,9 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - INGEST_TOKEN=${INGEST_TOKEN}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8787)); s.close()"]
@@ -37,3 +60,6 @@ services:
       - mcp-server
       - ingest
     restart: unless-stopped
+
+volumes:
+  postgres_data:
