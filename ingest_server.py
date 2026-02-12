@@ -1,5 +1,6 @@
 """
 HTTP ingest webhook for n8n (cloud) -> PostgreSQL task queue.
+Expects only: id, summary, source, description. No LLM; writes directly to PostgreSQL.
 
 Why separate from MCP stdio server?
 - MCP stdio uses stdin/stdout as the protocol transport. Web server logs on stdout can break it.
@@ -12,7 +13,7 @@ Then open http://localhost:8787/ or http://127.0.0.1:8787/ in the browser (not h
 Endpoint:
 - POST /ingest
   - Header: X-Ingest-Token: <secret>
-  - Body: JSON task payload (id, instructions, etc.)
+  - Body: JSON with id (required), summary, source, description (all optional).
   - Writes to PostgreSQL (set DATABASE_URL).
 """
 
@@ -116,15 +117,17 @@ async def ingest(
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Body was a string but not valid JSON: {e}") from e
 
-    # Unwrap { "body": "<json string>" } (n8n sometimes sends this; may contain unescaped newlines/tabs)
+    # Unwrap { "body": { ... } } or { "body": "<json string>" } (n8n sometimes sends this)
     if isinstance(raw, dict):
-        body_str = raw.get("body") or raw.get("Body")
-        if isinstance(body_str, str):
+        body_val = raw.get("body") or raw.get("Body")
+        if isinstance(body_val, dict):
+            raw = body_val
+        elif isinstance(body_val, str):
             try:
-                raw = json.loads(body_str)
+                raw = json.loads(body_val)
             except json.JSONDecodeError:
                 try:
-                    raw = json.loads(_sanitize_json_string(body_str))
+                    raw = json.loads(_sanitize_json_string(body_val))
                 except Exception as e:
                     raise HTTPException(status_code=422, detail=f"body field was a string but not valid JSON: {e}") from e
             except Exception as e:
