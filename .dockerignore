@@ -19,6 +19,7 @@ __pycache__
 
 # Project files not needed in the image (do NOT list mcp_server.py, ingest_server.py, database.py)
 tasks
+test_*.py
 ngrok.exe
 .cursor
 *.md

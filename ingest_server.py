@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field, field_validator
 load_dotenv()
 
 import database
+from llm import enhance_task
 
 
 def _sanitize_json_string(s: str) -> str:
@@ -148,6 +149,14 @@ async def ingest(
             status_code=422,
             detail=f"Invalid task payload. Must include at least id (string) and instructions (string). Error: {e}",
         ) from e
+
+    # Enhance task with LLM (falls back to original data on failure)
+    enhanced = await enhance_task(
+        task.title, task.instructions, task.acceptance_criteria, task.file_hints,
+    )
+    task.instructions = enhanced["instructions"]
+    task.acceptance_criteria = enhanced["acceptance_criteria"]
+    task.file_hints = enhanced["file_hints"]
 
     task_id = task.id
     existing_status = await database.get_task_status(task_id)

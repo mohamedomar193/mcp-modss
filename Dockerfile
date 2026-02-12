@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code (mcp_server, ingest_server, database; .dockerignore excludes the rest)
-COPY mcp_server.py ingest_server.py database.py ./
+COPY mcp_server.py ingest_server.py database.py llm.py ./
 
 # Run as non-root
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
