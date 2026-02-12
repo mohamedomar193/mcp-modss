@@ -12,7 +12,7 @@ When Jira issues arrive via n8n webhook, they typically contain raw bug reports 
 
 ### The Solution
 
-We added an **LLM prompt engineering layer** to the ingest pipeline. When a Jira issue arrives via webhook, it passes through OpenAI's GPT-5 mini model **before** being stored in PostgreSQL. The LLM transforms raw Jira data into structured developer instructions.
+We added an **LLM prompt engineering layer** to the MCP server. When Cursor calls `get_task`, the raw Jira data passes through OpenAI's GPT-5 mini model **before** being returned to Cursor. The ingest server stores raw data as-is — the LLM enhancement happens at read time, not write time.
 
 ### Before vs After
 
@@ -43,11 +43,11 @@ We added an **LLM prompt engineering layer** to the ingest pipeline. When a Jira
 | File | Type | Change |
 |------|------|--------|
 | `llm.py` | NEW | OpenAI-based task enhancement module (GPT-5 mini) |
-| `ingest_server.py` | MODIFIED | +1 import, +6 lines calling `enhance_task()` |
+| `mcp_server.py` | MODIFIED | +1 import, LLM enhancement in `get_task` tool |
 | `requirements.txt` | MODIFIED | Added `openai>=1.0.0` |
 | `env.example` | MODIFIED | Added `OPENAI_API_KEY` variable |
 | `Dockerfile` | MODIFIED | Added `llm.py` to COPY command |
-| `docker-compose.yml` | MODIFIED | Added `OPENAI_API_KEY` env var for ingest service |
+| `docker-compose.yml` | MODIFIED | Added `OPENAI_API_KEY` env var for mcp-server service |
 | `.dockerignore` | MODIFIED | Added `test_*.py` exclusion |
 
 ### How It Works (Flow)
@@ -62,6 +62,12 @@ n8n Workflow --> POST /ingest (with X-Ingest-Token header)
 Ingest Server: parse & validate payload (Pydantic)
     |
     v
+PostgreSQL: store raw task (as-is from n8n)
+    |
+    v
+Cursor: list_tasks -> get_task
+    |
+    v
 NEW: LLM Enhancement (OpenAI / GPT-5 mini)     <-- added step
     |   - Transforms raw instructions into numbered steps
     |   - Generates acceptance_criteria if missing
@@ -69,10 +75,7 @@ NEW: LLM Enhancement (OpenAI / GPT-5 mini)     <-- added step
     |   - Falls back to original data if LLM fails
     |
     v
-PostgreSQL: store enhanced task (same schema, no migration)
-    |
-    v
-Cursor: list_tasks -> get_task -> apply changes -> complete_task
+Cursor receives enhanced task -> apply changes -> complete_task
 ```
 
 ### n8n Workflow Configuration
@@ -127,8 +130,8 @@ n8n is the automation bridge between Jira and our MCP server. Here's how the wor
 1. Ingest server receives the POST, validates the `X-Ingest-Token` header
 2. Parses the body — handles various n8n quirks (string-wrapped JSON, `{"body": "..."}` wrappers, unescaped newlines)
 3. Validates the payload with Pydantic (`id` and `instructions` are required, everything else is optional)
-4. **LLM Enhancement** — sends the raw data to OpenAI GPT-5 mini, gets back structured developer instructions
-5. Stores the enhanced task in PostgreSQL
+4. Stores the raw task in PostgreSQL
+5. When Cursor calls `get_task`, the MCP server enhances the task via OpenAI GPT-5 mini before returning it
 6. Returns `{"ok": true, "summary": "Wrote PROJ-123"}` — n8n can check this for success
 
 **Duplicate handling**: If n8n sends the same issue `id` twice:
@@ -153,10 +156,11 @@ n8n is the automation bridge between Jira and our MCP server. Here's how the wor
 
 ### Safety & Fallback
 
-- If `OPENAI_API_KEY` is **not set**: tasks are stored as-is (original behavior)
-- If the OpenAI API **fails** (network error, rate limit): tasks are stored as-is
+- If `OPENAI_API_KEY` is **not set**: Cursor receives raw task data (original behavior)
+- If the OpenAI API **fails** (network error, rate limit): Cursor receives raw task data
 - **No database changes needed**: the existing `tasks` table schema already has `instructions` (text), `acceptance_criteria` (JSONB), and `file_hints` (JSONB)
-- The LLM step is **non-blocking** — if it fails, the ingest endpoint still returns 200
+- The LLM step is **non-blocking** — if it fails, `get_task` still returns the raw task data
+- Ingest always succeeds regardless of LLM status — raw data is stored reliably
 
 ---
 
@@ -276,12 +280,11 @@ asyncio.run(cleanup())
 |  nginx:80                                          |
 |  +-- /ingest --> ingest:8787                       |
 |  |               +-- Pydantic validation           |
-|  |               +-- LLM enhancement (OpenAI) NEW   |
-|  |               +-- PostgreSQL write              |
+|  |               +-- PostgreSQL write (raw data)   |
 |  |                                                 |
 |  +-- /mcp -----> mcp-server:8000                   |
 |                  +-- list_tasks                     |
-|                  +-- get_task                       |
+|                  +-- get_task + LLM enhancement NEW |
 |                  +-- start_task                     |
 |                  +-- complete_task                  |
 |                  +-- fail_task                      |
@@ -304,7 +307,7 @@ asyncio.run(cleanup())
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes | Both | PostgreSQL connection string |
 | `INGEST_TOKEN` | Yes | Ingest | Secret token for webhook authentication |
-| `OPENAI_API_KEY` | No | Ingest | OpenAI API key for LLM enhancement (GPT-5 mini). If empty, tasks stored as-is |
+| `OPENAI_API_KEY` | No | MCP Server | OpenAI API key for LLM enhancement (GPT-5 mini). If empty, raw tasks returned as-is |
 
 ---
 
@@ -330,8 +333,8 @@ For higher throughput or different quality/cost tradeoffs, you can switch the mo
 
 ### LLM enhancement not working
 
-1. Check `OPENAI_API_KEY` is set: `docker compose exec ingest env | grep OPENAI`
-2. Check ingest logs: `docker compose logs ingest --tail=50`
+1. Check `OPENAI_API_KEY` is set: `docker compose exec mcp-server env | grep OPENAI`
+2. Check MCP server logs: `docker compose logs mcp-server --tail=50`
 3. Look for "LLM enhancement failed" in logs — the fallback kicks in silently
 
 ### Tasks stored without enhancement
