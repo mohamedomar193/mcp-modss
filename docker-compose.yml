@@ -1,14 +1,14 @@
 # MCP server + Postgres + ingest + nginx. Exposes port 80; nginx proxies /mcp and /ingest.
-# Usage: copy env.example to .env, set DATABASE_URL and INGEST_TOKEN, then:
+# Usage: copy env.example to .env, set POSTGRES_PASSWORD, INGEST_TOKEN, OPENAI_API_KEY, then:
 #   docker compose up -d
-# Cursor: http://localhost/mcp  |  n8n webhook: http://localhost/ingest
+# Cursor: http://your-ec2-ip/mcp  |  n8n webhook: http://your-ec2-ip/ingest
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: mcp_tasks
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -26,7 +26,8 @@ services:
     image: mcp-server:latest
     command: ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/mcp_tasks
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,9 +37,8 @@ services:
     image: mcp-server:latest
     command: ["uvicorn", "ingest_server:app", "--host", "0.0.0.0", "--port", "8787"]
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/mcp_tasks
       - INGEST_TOKEN=${INGEST_TOKEN}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

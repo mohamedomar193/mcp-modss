@@ -28,7 +28,7 @@ import re
 
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -55,29 +55,25 @@ app = FastAPI(title="MCP Ingest Webhook", version="1.0.0")
 
 
 class IngestTask(BaseModel):
-    """Payload from n8n/HTTP: id, summary, source, description only."""
+    """Payload from n8n/HTTP: only id, summary, source, description accepted."""
+    model_config = {"extra": "ignore"}
+
     id: str = Field(..., description="Unique identifier, e.g. SCRUM-1")
     summary: str | None = Field(default=None, description="Short title (Jira summary)")
     source: str | None = Field(default="jira")
     description: str | None = Field(default=None, description="Full text (Jira description)")
 
-    # Internal: set from summary/description for LLM and DB
-    title: str | None = None
-    instructions: str | None = None
-    acceptance_criteria: list[str] | None = None
-    file_hints: list[str] | None = None
-    meta: dict[str, Any] | None = None
+    @property
+    def title(self) -> str:
+        return (self.summary and self.summary.strip()) or self.id
 
-    @model_validator(mode="after")
-    def map_summary_description_to_title_instructions(self) -> "IngestTask":
-        """Derive title and instructions from summary/description for downstream."""
-        self.title = (self.summary and self.summary.strip()) or self.id
-        self.instructions = (
+    @property
+    def instructions(self) -> str:
+        return (
             (self.description and self.description.strip())
             or (self.summary and self.summary.strip())
             or "No description provided."
         )
-        return self
 
 
 def _require_token(header_token: str | None) -> None:
@@ -180,9 +176,6 @@ async def ingest(
             task.title,
             task.instructions,
             source=task.source or "jira",
-            acceptance_criteria=task.acceptance_criteria,
-            file_hints=task.file_hints,
-            meta=task.meta,
             updated_at=updated_at,
             previous_status=existing_status,
         )
@@ -193,9 +186,6 @@ async def ingest(
             task.title,
             task.instructions,
             source=task.source or "jira",
-            acceptance_criteria=task.acceptance_criteria,
-            file_hints=task.file_hints,
-            meta=task.meta,
         )
         return {"ok": True, "summary": f"Wrote {task_id}", "path": None}
 
