@@ -8,6 +8,10 @@ import json
 import os
 import sys
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Allow setting key via command line for quick testing
 if len(sys.argv) > 1:
     os.environ["OPENAI_API_KEY"] = sys.argv[1]

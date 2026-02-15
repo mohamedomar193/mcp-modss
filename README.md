@@ -1,8 +1,62 @@
-## Cursor + MCP (this repo) 
+## BillQode MCP Server
 
-This repo runs a **local MCP stdio server** that Cursor can call as a tool.
+Jira → n8n → MCP Server → Cursor IDE pipeline.
 
-It also supports a simple **task-queue** pattern so external systems (like n8n) can feed structured work items that Cursor can pull via MCP tools.
+Receives Jira issues via n8n webhook, stores them in PostgreSQL, and serves them to Cursor via MCP tools — enhanced by OpenAI GPT-5 mini with **RAG** (Retrieval-Augmented Generation).
+
+### Architecture
+
+```
+Jira Issue
+   ↓
+n8n Webhook (POST /ingest)
+   ↓
+ingest_server.py → PostgreSQL (raw task data)
+   ↓
+Cursor calls get_task via MCP
+   ↓
+mcp_server.py → RAG keyword match → GPT-5 mini enhancement
+   ↓
+Enhanced task returned to Cursor
+```
+
+### RAG — How It Works
+
+Instead of sending the full architecture handbook (~4000 tokens) with every OpenAI call, the system uses keyword-based retrieval:
+
+1. **Core Policy** (~15 lines) — always included. Enforces fundamental Clean Architecture rules.
+2. **Documentation sections** (`rag_docs.py`) — 18 detailed sections covering patterns, integrations, testing, etc.
+3. **Keyword matching** — ticket title + instructions are matched against section keywords. Only the top 5 relevant sections are attached.
+4. **Result**: ~30-50% fewer tokens per call, with more precise context.
+
+**Files:**
+- `rag_docs.py` — all documentation sections organized by department
+- `llm.py` — Core Policy, keyword matcher (`_select_sections`), dynamic prompt builder
+
+### Multi-Department Support
+
+`rag_docs.py` is organized by department for future expansion:
+
+| List | Department | Status |
+|------|-----------|--------|
+| `BACKEND_SECTIONS` | Laravel 11 / Clean Architecture / DDD | 18 sections |
+| `FRONTEND_SECTIONS` | Next.js / React / Vue | Placeholder |
+| `MOBILE_SECTIONS` | Flutter / React Native / Swift | Placeholder |
+| `DEVOPS_SECTIONS` | CI/CD / Docker / AWS / Terraform | Placeholder |
+
+All lists merge into `SECTIONS` automatically. To add a new department, add sections to the appropriate list with `id`, `department`, `keywords`, and `content`.
+
+### Project Files
+
+| File | Purpose |
+|------|---------|
+| `mcp_server.py` | MCP server (port 8000) — exposes tools to Cursor |
+| `ingest_server.py` | Webhook server (port 8787) — receives from n8n |
+| `database.py` | PostgreSQL async connection pool + task CRUD |
+| `llm.py` | OpenAI GPT-5 mini integration with RAG |
+| `rag_docs.py` | Documentation sections for RAG retrieval |
+| `docker-compose.yml` | Production stack (mcp-server + ingest + nginx) |
+| `Dockerfile` | Container image for both servers |
 
 ### 1) Install
 
@@ -12,108 +66,80 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2) Configure Cursor to load the MCP tool
+### 2) Configure Environment
 
-Copy `mcp.json.example` to `.cursor/mcp.json`, then in Cursor:
-- **Settings → MCP** (or Tools/Integrations → MCP)
-- Refresh tools / enable the server if needed
+Copy `env.example` to `.env` and set:
 
-### 3) Set your key
+```
+DATABASE_URL=postgresql://user:pass@localhost:5432/mcp_tasks
+INGEST_TOKEN=change-me-to-a-long-random-secret
+OPENAI_API_KEY=sk-...
+```
 
-Set `OPENAI_API_KEY` in your environment (recommended), or in `.cursor/mcp.json` via `env`.
-
-### 3b) Run the ingest webhook (for n8n cloud)
-
-If n8n runs in the cloud, it can’t write files to your PC. So you run a small HTTP webhook locally that writes task JSON into `tasks/inbox/`.
-
-In a separate terminal:
+### 3) Run Locally
 
 ```powershell
-$env:INGEST_TOKEN="change-me-to-a-long-random-secret"
+# Terminal 1 — MCP server
+uvicorn mcp_server:app --host 0.0.0.0 --port 8000
+
+# Terminal 2 — Ingest webhook
 uvicorn ingest_server:app --host 0.0.0.0 --port 8787
 ```
 
-Optional health check (in a browser):
-- `http://127.0.0.1:8787/health`
+### 4) Configure Cursor
 
-### 3c) Expose the webhook with ngrok
+Copy `mcp.json.example` to `.cursor/mcp.json`, then in Cursor:
+- **Settings → MCP** → add server with URL (e.g. `http://localhost:8000/mcp` or `http://your-ec2/mcp`)
 
-In another terminal:
+### 5) Deploy on EC2
 
-```powershell
-.\ngrok.exe http 8787
+```bash
+# On the server
+git pull
+cp env.example .env   # edit with real values
+docker compose build --no-cache
+docker compose up -d
 ```
 
-ngrok will print a public HTTPS URL like `https://xxxx.ngrok-free.app`.
-Your n8n endpoint becomes:
-- `POST https://xxxx.ngrok-free.app/ingest`
+Cursor connects to `http://your-ec2-ip/mcp`. n8n posts to `http://your-ec2-ip/ingest`.
 
-### 4) Use it in Composer (Agent)
+See `DEPLOYMENT.md` for full deployment guide.
 
-In **Composer/Agent mode**, ask Cursor to use the MCP tool:
+### MCP Tools
 
-- “Call `generate_code` with `language="python"`, `intent="snippet"`, and my prompt. Use its JSON as the source of truth.”
+| Tool | Description |
+|------|-------------|
+| `list_tasks` | List tasks from inbox (filter by status) |
+| `get_task` | Get a task by ID — enhanced by GPT-5 mini via RAG |
+| `enqueue_task` | Create a task manually |
+| `start_task` | Mark task as in_progress |
+| `complete_task` | Mark task as completed |
+| `fail_task` | Mark task as failed |
 
-### Jira → n8n → MCP → Cursor (your flowchart)
+### n8n Webhook Payload
 
-Cursor can’t be “pushed” a prompt remotely in a fully headless way; instead, the reliable pattern is **n8n drops a task** somewhere Cursor can see, and **Cursor pulls the task** via MCP when you (or the agent) ask it to.
-
-**Recommended local-first wiring:**
-
-- **n8n**: write a JSON file into `tasks/inbox/` in this repo (via git commit/PR, a shared folder, or any file drop mechanism).
-- **n8n cloud**: POST the JSON to your local webhook `/ingest` (exposed via ngrok), which writes into `tasks/inbox/`.
-- **MCP server**: exposes tools to list/load/complete tasks (`list_tasks`, `get_task`, `complete_task`).
-- **Cursor (Agent)**: calls `list_tasks` → `get_task` → uses the returned `task.instructions` to generate/apply changes → `complete_task`.
-
-### Deploy MCP server on EC2
-
-Run the MCP server over HTTP on your server (e.g. EC2):
-
-1. **On the server:** set `DATABASE_URL` (and optionally `INGEST_TOKEN`) in the environment, then:
-   ```bash
-   uvicorn mcp_server:app --host 0.0.0.0 --port 8000
-   ```
-   The MCP endpoint is **POST /mcp**. Expose port 8000 (and use HTTPS in front if needed).
-2. **In Cursor:** use **Settings → MCP** and add a server with `url` (e.g. `https://your-ec2/mcp`) and optional `headers` (e.g. `Authorization: Bearer YOUR_API_KEY`).
-
-
-### n8n HTTP Request node (cloud) — exact config
-
-- **Method**: `POST`
-- **URL**: `https://xxxx.ngrok-free.app/ingest`
-- **Headers**:
-  - `Content-Type`: `application/json`
-  - `X-Ingest-Token`: `change-me-to-a-long-random-secret` (must match your PC `INGEST_TOKEN`)
-- **Body** (JSON):
+```
+POST /ingest
+Header: X-Ingest-Token: <secret>
+```
 
 ```json
 {
-  "id": "JIRA-123",
+  "id": "SCRUM-123",
+  "summary": "Short title from Jira",
   "source": "jira",
-  "title": "Short summary from Jira",
-  "instructions": "Clear step-by-step instructions for the code change",
-  "acceptance_criteria": ["..."],
-  "file_hints": ["..."],
-  "meta": { "jira_url": "..." }
+  "description": "Full description from Jira"
 }
 ```
 
-### Prompt templates (reliable tool usage)
-
-**Force the tool call**
-
-> Before answering, call the MCP tool `generate_code` with:
-> - language: "<language>"
-> - intent: "patch"
-> - prompt: "<my request>"
-> Then, parse the returned JSON. If `ok` is false, stop and ask me what to do next. If `ok` is true, use `code` as the output.
-
-**No guessing*
-
-> You must not guess. If the MCP tool output is missing fields or is invalid JSON, retry once with a tighter prompt; if it still fails, stop and ask me.
-
-### Prompt template (task-driven)
+### Prompt Template (Task-Driven)
 
 > Call MCP tool `list_tasks` (limit=5). Pick the newest task. Then call `get_task` for its id. Use ONLY `task.instructions` (and any structured fields like acceptance criteria / file hints) as the source of truth. Implement the changes in the repo. After you finish, call `complete_task` with the task id and a short note of what changed.
 
+### Test LLM Enhancement
 
+```powershell
+python test_llm.py
+```
+
+This sends a sample ticket through the RAG pipeline and prints the enhanced output.
