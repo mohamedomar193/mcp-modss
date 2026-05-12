@@ -79,7 +79,7 @@ async def get_task(task_id: str) -> str:
     # Enhance task with LLM before returning to Cursor (falls back to original on failure)
     enhanced = await enhance_task(
         task.get("title"), task.get("instructions", ""),
-        task.get("acceptance_criteria"), task.get("file_hints"),
+        task.get("acceptance_criteria"), task.get("file_hints"), task.get("meta"),
     )
     task["instructions"] = enhanced["instructions"]
     task["acceptance_criteria"] = enhanced["acceptance_criteria"]

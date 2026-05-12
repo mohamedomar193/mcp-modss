@@ -20,6 +20,22 @@ DEFAULT_STATUS: TaskStatus = "pending"
 _DB_POOL: asyncpg.Pool | None = None
 
 
+def _json_or_none(value: Any) -> str | None:
+    """Serialize JSON values while preserving empty lists/dicts when provided."""
+    return json.dumps(value) if value is not None else None
+
+
+def _json_value(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return default
+    return value
+
+
 def get_database_url() -> str:
     url = os.getenv("DATABASE_URL", "").strip()
     if not url:
@@ -58,9 +74,9 @@ def _row_to_task(row: asyncpg.Record) -> dict[str, Any]:
         "source": row["source"],
         "title": row["title"],
         "instructions": row["instructions"],
-        "acceptance_criteria": row["acceptance_criteria"] or [],
-        "file_hints": row["file_hints"] or [],
-        "meta": row["meta"],
+        "acceptance_criteria": _json_value(row["acceptance_criteria"], []),
+        "file_hints": _json_value(row["file_hints"], []),
+        "meta": _json_value(row["meta"], None),
         "status": row["status"] or DEFAULT_STATUS,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "started_at": row["started_at"].isoformat() if row["started_at"] else None,
@@ -168,9 +184,9 @@ async def enqueue_task(
         source,
         title or "",
         instructions or "",
-        json.dumps(acceptance_criteria) if acceptance_criteria is not None else None,
-        json.dumps(file_hints) if file_hints is not None else None,
-        json.dumps(meta) if meta is not None else None,
+        _json_or_none(acceptance_criteria),
+        _json_or_none(file_hints),
+        _json_or_none(meta),
         DEFAULT_STATUS,
         now,
     )
@@ -278,9 +294,9 @@ async def upsert_task(
         source or "jira",
         title or "",
         instructions or "",
-        json.dumps(acceptance_criteria) if acceptance_criteria else None,
-        json.dumps(file_hints) if file_hints else None,
-        json.dumps(meta) if meta else None,
+        _json_or_none(acceptance_criteria),
+        _json_or_none(file_hints),
+        _json_or_none(meta),
         DEFAULT_STATUS,
         now,
         updated_at,

@@ -128,9 +128,22 @@ Header: X-Ingest-Token: <secret>
   "id": "SCRUM-123",
   "summary": "Short title from Jira",
   "source": "jira",
-  "description": "Full description from Jira"
+  "description": "Full description from Jira",
+  "acceptance_criteria": ["Testable condition from Jira"],
+  "file_hints": ["Existing file or area to inspect"],
+  "issue_type": "Story",
+  "labels": ["reports"],
+  "components": ["Reservations"],
+  "meta": { "priority": "High" }
 }
 ```
+
+`description` must be the real Jira description. Empty or missing descriptions are rejected with
+HTTP 422 so the MCP does not invent implementation details from the ticket key alone.
+
+Before OpenAI enhancement, tickets are classified as CRUD, existing feature, reporting/filter,
+frontend, backend, bug fix, or unknown. Non-CRUD tickets are guarded against generated domain
+scaffolds, fake Jira-key model names, and migrations inferred from the issue id.
 
 ### Prompt Template (Task-Driven)
 
