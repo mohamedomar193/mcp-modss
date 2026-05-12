@@ -1,14 +1,14 @@
-# MCP server + Postgres + ingest + nginx. Exposes port 80; nginx proxies /mcp and /ingest.
-# Usage: copy env.example to .env, set POSTGRES_PASSWORD, INGEST_TOKEN, OPENAI_API_KEY, then:
-#   docker compose up -d
-# Cursor: http://your-ec2-ip/mcp  |  n8n webhook: http://your-ec2-ip/ingest
+# MCP server + Postgres + ingest.
+# Host Nginx (outside Docker) proxies:
+#   /mcp    -> 127.0.0.1:3000
+#   /ingest -> 127.0.0.1:3001
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: mcp_tasks
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -24,42 +24,41 @@ services:
   mcp-server:
     build: .
     image: mcp-server:latest
-    command: ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "3000"]
     environment:
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/mcp_tasks
+      - DATABASE_URL=postgresql://postgres:postgres@mcp-server-postgres-1:5432/mcp_tasks
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-
-  ingest:
-    image: mcp-server:latest
-    command: ["uvicorn", "ingest_server:app", "--host", "0.0.0.0", "--port", "8787"]
-    environment:
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/mcp_tasks
-      - INGEST_TOKEN=${INGEST_TOKEN}
+    ports:
+      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8787)); s.close()"]
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3000)); s.close()"]
       interval: 30s
       timeout: 3s
       start_period: 10s
       retries: 3
 
-  nginx:
-    image: nginx:1.25-alpine
+  ingest:
+    image: mcp-server:latest
+    command: ["uvicorn", "ingest_server:app", "--host", "0.0.0.0", "--port", "3001"]
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@mcp-server-postgres-1:5432/mcp_tasks
+      - INGEST_TOKEN=${INGEST_TOKEN}
     ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - "127.0.0.1:3001:3001"
     depends_on:
-      - mcp-server
-      - ingest
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3001)); s.close()"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
 volumes:
   postgres_data:
