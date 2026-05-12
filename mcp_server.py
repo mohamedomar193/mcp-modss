@@ -23,7 +23,6 @@ from mcp.server.transport_security import TransportSecuritySettings
 load_dotenv()
 
 import database
-from llm import enhance_task
 
 # Task status values (re-export for tool annotations)
 TaskStatus = Literal["pending", "in_progress", "completed", "failed"]
@@ -75,15 +74,6 @@ async def get_task(task_id: str) -> str:
             {"ok": False, "summary": f"Task not found: {task_id}", "task": None, "error": {"type": "not_found"}},
             ensure_ascii=False,
         )
-
-    # Enhance task with LLM before returning to Cursor (falls back to original on failure)
-    enhanced = await enhance_task(
-        task.get("title"), task.get("instructions", ""),
-        task.get("acceptance_criteria"), task.get("file_hints"), task.get("meta"),
-    )
-    task["instructions"] = enhanced["instructions"]
-    task["acceptance_criteria"] = enhanced["acceptance_criteria"]
-    task["file_hints"] = enhanced["file_hints"]
 
     return json.dumps({"ok": True, "summary": f"Loaded task {task['id']}.", "task": task, "error": None}, ensure_ascii=False)
 

@@ -13,7 +13,7 @@ Then open http://localhost:8787/ or http://127.0.0.1:8787/ in the browser (not h
 Endpoint:
 - POST /ingest
   - Header: X-Ingest-Token: <secret>
-  - Body: JSON with id and a real description (required), plus optional Jira metadata.
+  - Body: JSON with id and generated instructions or description, plus optional Jira metadata.
   - Writes to PostgreSQL (set DATABASE_URL).
 """
 
@@ -58,10 +58,9 @@ def _string_list(value: Any) -> list[str] | None:
     if value is None:
         return None
     if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
+        return [value] if value.strip() else []
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
+        return [item for item in value if isinstance(item, str)]
     return []
 
 
@@ -71,8 +70,14 @@ class IngestTask(BaseModel):
 
     id: str = Field(..., description="Unique identifier, e.g. SCRUM-1")
     summary: str | None = Field(default=None, description="Short title (Jira summary)")
+    title_field: str | None = Field(
+        default=None,
+        alias="title",
+        description="Short title if sender does not use summary",
+    )
     source: str | None = Field(default="jira")
     description: str | None = Field(default=None, description="Full text (Jira description)")
+    instructions: str | None = Field(default=None, description="Generated task prompt from n8n")
     acceptance_criteria: list[str] | str | None = Field(default=None)
     file_hints: list[str] | str | None = Field(default=None)
     issue_type: str | None = Field(default=None)
@@ -82,11 +87,19 @@ class IngestTask(BaseModel):
 
     @property
     def title(self) -> str:
-        return (self.summary and self.summary.strip()) or self.id
+        return (
+            (self.summary and self.summary.strip())
+            or (self.title_field and self.title_field.strip())
+            or self.id
+        )
 
     @property
-    def instructions(self) -> str:
-        return (self.description or "").strip()
+    def task_instructions(self) -> str:
+        if self.instructions and self.instructions.strip():
+            return self.instructions
+        if self.description and self.description.strip():
+            return self.description
+        return ""
 
     @property
     def criteria(self) -> list[str] | None:
@@ -178,7 +191,7 @@ async def ingest(
     if not isinstance(raw, dict):
         raise HTTPException(
             status_code=422,
-            detail="Expected a JSON object or array with task (id, summary, source, description).",
+            detail="Expected a JSON object or array with task (id, summary/title, source, instructions/description).",
         )
 
     # Validate/normalize into our schema (gives good error messages).
@@ -188,14 +201,14 @@ async def ingest(
         raise HTTPException(
             status_code=422,
             detail=(
-                "Invalid task payload. Expected id, summary, source, description, "
+                "Invalid task payload. Expected id, summary/title, source, instructions/description, "
                 f"acceptance_criteria, file_hints, issue_type, labels, components, meta. Error: {e}"
             ),
         ) from e
 
     task_id = task.id
-    if not task.instructions:
-        raise HTTPException(status_code=422, detail="Ticket description is required for MCP enhancement")
+    if not task.task_instructions:
+        raise HTTPException(status_code=422, detail="Task instructions or description is required")
 
     existing_status = await database.get_task_status(task_id)
 
@@ -217,7 +230,7 @@ async def ingest(
         await database.upsert_task(
             task_id,
             task.title,
-            task.instructions,
+            task.task_instructions,
             source=task.source or "jira",
             acceptance_criteria=task.criteria,
             file_hints=task.hints,
@@ -230,7 +243,7 @@ async def ingest(
         await database.upsert_task(
             task_id,
             task.title,
-            task.instructions,
+            task.task_instructions,
             source=task.source or "jira",
             acceptance_criteria=task.criteria,
             file_hints=task.hints,

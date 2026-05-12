@@ -2,7 +2,7 @@
 
 Jira → n8n → MCP Server → Cursor IDE pipeline.
 
-Receives Jira issues via n8n webhook, stores them in PostgreSQL, and serves them to Cursor via MCP tools — enhanced by OpenAI GPT-5 mini with **RAG** (Retrieval-Augmented Generation).
+Receives already-generated Jira task prompts from n8n, stores them in PostgreSQL, and serves them to Cursor via MCP tools exactly as stored.
 
 ### Architecture
 
@@ -11,27 +11,26 @@ Jira Issue
    ↓
 n8n Webhook (POST /ingest)
    ↓
-ingest_server.py → PostgreSQL (raw task data)
+n8n Edit Fields → Message a model → Code/Set → HTTP Request
+   ↓
+ingest_server.py → PostgreSQL
    ↓
 Cursor calls get_task via MCP
    ↓
-mcp_server.py → RAG keyword match → GPT-5 mini enhancement
-   ↓
-Enhanced task returned to Cursor
+Stored task returned exactly
 ```
 
-### RAG — How It Works
+### Prompt Generation
 
-Instead of sending the full architecture handbook (~4000 tokens) with every OpenAI call, the system uses keyword-based retrieval:
+n8n is responsible for prompt generation. The MCP server does not call OpenAI, run RAG, classify tickets, or rewrite prompts during task retrieval.
 
-1. **Core Policy** (~15 lines) — always included. Enforces fundamental Clean Architecture rules.
-2. **Documentation sections** (`rag_docs.py`) — 18 detailed sections covering patterns, integrations, testing, etc.
-3. **Keyword matching** — ticket title + instructions are matched against section keywords. Only the top 5 relevant sections are attached.
-4. **Result**: ~30-50% fewer tokens per call, with more precise context.
+The expected workflow is:
 
-**Files:**
-- `rag_docs.py` — all documentation sections organized by department
-- `llm.py` — Core Policy, keyword matcher (`_select_sections`), dynamic prompt builder
+```
+Jira → n8n Webhook → Edit Fields → Message a model → Code/Set → HTTP Request → MCP ingest
+```
+
+`llm.py` and `rag_docs.py` may remain in the repo for reference, but MCP task retrieval does not import or execute them.
 
 ### Multi-Department Support
 
@@ -53,8 +52,8 @@ All lists merge into `SECTIONS` automatically. To add a new department, add sect
 | `mcp_server.py` | MCP server (port 8000) — exposes tools to Cursor |
 | `ingest_server.py` | Webhook server (port 8787) — receives from n8n |
 | `database.py` | PostgreSQL async connection pool + task CRUD |
-| `llm.py` | OpenAI GPT-5 mini integration with RAG |
-| `rag_docs.py` | Documentation sections for RAG retrieval |
+| `llm.py` | Legacy/local prompt enhancement helpers; not used by MCP task retrieval |
+| `rag_docs.py` | Legacy RAG documentation sections; not used by MCP task retrieval |
 | `docker-compose.yml` | Production stack (mcp-server + ingest + nginx) |
 | `Dockerfile` | Container image for both servers |
 
@@ -110,7 +109,7 @@ See `DEPLOYMENT.md` for full deployment guide.
 | Tool | Description |
 |------|-------------|
 | `list_tasks` | List tasks from inbox (filter by status) |
-| `get_task` | Get a task by ID — enhanced by GPT-5 mini via RAG |
+| `get_task` | Get a task by ID exactly as stored in PostgreSQL |
 | `enqueue_task` | Create a task manually |
 | `start_task` | Mark task as in_progress |
 | `complete_task` | Mark task as completed |
@@ -128,7 +127,7 @@ Header: X-Ingest-Token: <secret>
   "id": "SCRUM-123",
   "summary": "Short title from Jira",
   "source": "jira",
-  "description": "Full description from Jira",
+  "instructions": "Generated implementation prompt from n8n",
   "acceptance_criteria": ["Testable condition from Jira"],
   "file_hints": ["Existing file or area to inspect"],
   "issue_type": "Story",
@@ -138,21 +137,17 @@ Header: X-Ingest-Token: <secret>
 }
 ```
 
-`description` must be the real Jira description. Empty or missing descriptions are rejected with
-HTTP 422 so the MCP does not invent implementation details from the ticket key alone.
-
-Before OpenAI enhancement, tickets are classified as CRUD, existing feature, reporting/filter,
-frontend, backend, bug fix, or unknown. Non-CRUD tickets are guarded against generated domain
-scaffolds, fake Jira-key model names, and migrations inferred from the issue id.
+`instructions` is preferred and should contain the generated n8n prompt. `description` is accepted
+as a fallback for older payloads. If both are missing or empty, `/ingest` returns HTTP 422.
 
 ### Prompt Template (Task-Driven)
 
 > Call MCP tool `list_tasks` (limit=5). Pick the newest task. Then call `get_task` for its id. Use ONLY `task.instructions` (and any structured fields like acceptance criteria / file hints) as the source of truth. Implement the changes in the repo. After you finish, call `complete_task` with the task id and a short note of what changed.
 
-### Test LLM Enhancement
+### Test Ingest And Retrieval
 
 ```powershell
-python test_llm.py
+python -m unittest test_pipeline.py
 ```
 
-This sends a sample ticket through the RAG pipeline and prints the enhanced output.
+This verifies that `/ingest` stores n8n-generated task fields and `get_task` returns them without MCP-side prompt generation.
