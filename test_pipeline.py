@@ -165,7 +165,16 @@ class PipelineTests(unittest.TestCase):
                 "key": "BILQ-2501",
                 "fields": {
                     "summary": "[CL-D] Reservation Advanced Filters",
-                    "description": GENERATED_INSTRUCTIONS,
+                    "description": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{"type": "text", "text": GENERATED_INSTRUCTIONS}],
+                            }
+                        ],
+                    },
                     "labels": ["Release1"],
                     "components": [{"name": "business-facing-app"}],
                     "project": {"key": "BILQ"},
@@ -215,6 +224,7 @@ class PipelineTests(unittest.TestCase):
         args, kwargs = calls[0]
         self.assertEqual(args[0], "BILQ-2501")
         self.assertEqual(args[1], "[CL-D] Reservation Advanced Filters")
+        self.assertEqual(args[2], GENERATED_INSTRUCTIONS)
         self.assertEqual(kwargs["meta"]["project_key"], "BILQ")
         self.assertEqual(kwargs["meta"]["issue_type"], "Story")
         self.assertEqual(kwargs["meta"]["labels"], ["Release1"])

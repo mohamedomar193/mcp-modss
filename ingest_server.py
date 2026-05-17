@@ -90,6 +90,23 @@ def _json_object_from_string(value: str | None) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _jira_doc_to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for part in (_jira_doc_to_text(item) for item in value) if part)
+    if isinstance(value, dict):
+        text = value.get("text")
+        if isinstance(text, str):
+            return text
+        content = value.get("content")
+        if isinstance(content, list):
+            return "\n".join(part for part in (_jira_doc_to_text(item) for item in content) if part)
+    return ""
+
+
 def _extract_jira_linked_test_cases(issue: dict[str, Any]) -> list[dict[str, Any]]:
     fields = issue.get("fields")
     if not isinstance(fields, dict):
@@ -145,8 +162,8 @@ def _normalize_jira_issue_payload(raw: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(raw)
     normalized.setdefault("id", issue.get("key") or issue.get("id"))
     normalized.setdefault("summary", fields.get("summary"))
-    normalized.setdefault("description", fields.get("description"))
-    normalized.setdefault("acceptance_criteria", fields.get("customfield_10037"))
+    normalized.setdefault("description", _jira_doc_to_text(fields.get("description")))
+    normalized.setdefault("acceptance_criteria", _jira_doc_to_text(fields.get("customfield_10037")))
 
     issue_type = fields.get("issuetype")
     if isinstance(issue_type, dict):
