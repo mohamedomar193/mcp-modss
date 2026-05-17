@@ -45,6 +45,111 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["detail"], "Task instructions or description is required")
 
+    def test_ingest_rejects_empty_generated_json_string(self) -> None:
+        with patch.object(ingest_server, "INGEST_TOKEN", "test-token"):
+            client = TestClient(ingest_server.app)
+            response = client.post(
+                "/ingest",
+                headers={"X-Ingest-Token": "test-token"},
+                json={
+                    "id": "BILQ-2501",
+                    "title": "Advanced filters",
+                    "instructions": '{"instructions":"","acceptance_criteria":[],"file_hints":[]}',
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "Task instructions or description is required")
+
+    def test_ingest_parses_generated_json_string_when_present(self) -> None:
+        calls = []
+
+        async def fake_get_task_status(task_id: str):
+            return None
+
+        async def fake_upsert_task(*args, **kwargs):
+            calls.append((args, kwargs))
+
+        payload = {
+            "id": "BILQ-2501",
+            "title": "Advanced filters",
+            "source": "jira",
+            "instructions": json.dumps(
+                {
+                    "instructions": GENERATED_INSTRUCTIONS,
+                    "acceptance_criteria": BILQ_2501_CRITERIA,
+                    "file_hints": ["resources/js/pages/reports/reservations"],
+                }
+            ),
+        }
+
+        with (
+            patch.object(ingest_server, "INGEST_TOKEN", "test-token"),
+            patch.object(ingest_server.database, "get_task_status", fake_get_task_status),
+            patch.object(ingest_server.database, "upsert_task", fake_upsert_task),
+        ):
+            client = TestClient(ingest_server.app)
+            response = client.post(
+                "/ingest",
+                headers={"X-Ingest-Token": "test-token"},
+                json=payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        args, kwargs = calls[0]
+        self.assertEqual(args[2], GENERATED_INSTRUCTIONS)
+        self.assertEqual(kwargs["acceptance_criteria"], BILQ_2501_CRITERIA)
+        self.assertEqual(kwargs["file_hints"], ["resources/js/pages/reports/reservations"])
+
+    def test_ingest_preserves_linked_jira_test_cases_in_meta(self) -> None:
+        calls = []
+
+        async def fake_get_task_status(task_id: str):
+            return None
+
+        async def fake_upsert_task(*args, **kwargs):
+            calls.append((args, kwargs))
+
+        linked_test_cases = [
+            {
+                "key": "BILQ-T123",
+                "title": "Verify advanced filters are applied",
+                "steps": ["Open Reservations Reports", "Apply slot filter"],
+                "expected_result": "Report results are filtered by slot",
+            }
+        ]
+
+        payload = {
+            "id": "BILQ-2501",
+            "title": "Advanced filters",
+            "source": "jira",
+            "instructions": GENERATED_INSTRUCTIONS,
+            "test_cases": linked_test_cases,
+            "meta": {"priority": "High"},
+        }
+
+        with (
+            patch.object(ingest_server, "INGEST_TOKEN", "test-token"),
+            patch.object(ingest_server.database, "get_task_status", fake_get_task_status),
+            patch.object(ingest_server.database, "upsert_task", fake_upsert_task),
+        ):
+            client = TestClient(ingest_server.app)
+            response = client.post(
+                "/ingest",
+                headers={"X-Ingest-Token": "test-token"},
+                json=payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        _, kwargs = calls[0]
+        self.assertEqual(
+            kwargs["meta"],
+            {
+                "priority": "High",
+                "jira_test_cases": linked_test_cases,
+            },
+        )
+
     def test_ingest_accepts_instructions_and_stores_exact_task_fields(self) -> None:
         calls = []
 

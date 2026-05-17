@@ -64,6 +64,32 @@ def _string_list(value: Any) -> list[str] | None:
     return []
 
 
+def _list_of_objects(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return [{"text": value}]
+        return _list_of_objects(parsed)
+    return []
+
+
+def _json_object_from_string(value: str | None) -> dict[str, Any] | None:
+    if not value or not value.strip().startswith("{"):
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 class IngestTask(BaseModel):
     """Payload from n8n/HTTP. Unknown fields are ignored by design."""
     model_config = {"extra": "ignore"}
@@ -80,6 +106,21 @@ class IngestTask(BaseModel):
     instructions: str | None = Field(default=None, description="Generated task prompt from n8n")
     acceptance_criteria: list[str] | str | None = Field(default=None)
     file_hints: list[str] | str | None = Field(default=None)
+    test_cases: list[dict[str, Any]] | dict[str, Any] | str | None = Field(
+        default=None,
+        alias="test_cases",
+        description="Linked Jira TestCase data attached to the source story",
+    )
+    test_cases_camel: list[dict[str, Any]] | dict[str, Any] | str | None = Field(
+        default=None,
+        alias="testCases",
+        description="Linked Jira TestCase data attached to the source story",
+    )
+    jira_test_cases: list[dict[str, Any]] | dict[str, Any] | str | None = Field(
+        default=None,
+        alias="jira_test_cases",
+        description="Linked Jira TestCase data attached to the source story",
+    )
     issue_type: str | None = Field(default=None)
     labels: list[str] | str | None = Field(default=None)
     components: list[str] | str | None = Field(default=None)
@@ -94,7 +135,21 @@ class IngestTask(BaseModel):
         )
 
     @property
+    def generated_payload(self) -> dict[str, Any]:
+        return (
+            _json_object_from_string(self.instructions)
+            or _json_object_from_string(self.description)
+            or {}
+        )
+
+    @property
     def task_instructions(self) -> str:
+        payload = self.generated_payload
+        parsed_instructions = payload.get("instructions")
+        if isinstance(parsed_instructions, str) and parsed_instructions.strip():
+            return parsed_instructions
+        if payload:
+            return ""
         if self.instructions and self.instructions.strip():
             return self.instructions
         if self.description and self.description.strip():
@@ -103,11 +158,24 @@ class IngestTask(BaseModel):
 
     @property
     def criteria(self) -> list[str] | None:
-        return _string_list(self.acceptance_criteria)
+        return _string_list(self.acceptance_criteria) or _string_list(
+            self.generated_payload.get("acceptance_criteria")
+        )
 
     @property
     def hints(self) -> list[str] | None:
-        return _string_list(self.file_hints)
+        return _string_list(self.file_hints) or _string_list(self.generated_payload.get("file_hints"))
+
+    @property
+    def linked_test_cases(self) -> list[dict[str, Any]]:
+        return (
+            _list_of_objects(self.test_cases)
+            or _list_of_objects(self.test_cases_camel)
+            or _list_of_objects(self.jira_test_cases)
+            or _list_of_objects(self.generated_payload.get("test_cases"))
+            or _list_of_objects(self.generated_payload.get("testCases"))
+            or _list_of_objects(self.generated_payload.get("jira_test_cases"))
+        )
 
     @property
     def metadata(self) -> dict[str, Any] | None:
@@ -120,6 +188,9 @@ class IngestTask(BaseModel):
             meta["labels"] = labels
         if components is not None:
             meta["components"] = components
+        test_cases = self.linked_test_cases
+        if test_cases:
+            meta["jira_test_cases"] = test_cases
         return meta or None
 
 
@@ -202,11 +273,14 @@ async def ingest(
             status_code=422,
             detail=(
                 "Invalid task payload. Expected id, summary/title, source, instructions/description, "
-                f"acceptance_criteria, file_hints, issue_type, labels, components, meta. Error: {e}"
+                "acceptance_criteria, file_hints, test_cases, issue_type, labels, components, "
+                f"meta. Error: {e}"
             ),
         ) from e
 
     task_id = task.id
+    if not task_id.strip():
+        raise HTTPException(status_code=422, detail="Task id is required")
     if not task.task_instructions:
         raise HTTPException(status_code=422, detail="Task instructions or description is required")
 
