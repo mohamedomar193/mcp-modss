@@ -150,6 +150,94 @@ class PipelineTests(unittest.TestCase):
             },
         )
 
+    def test_ingest_extracts_attached_agiletest_cases_from_jira_issue(self) -> None:
+        calls = []
+
+        async def fake_get_task_status(task_id: str):
+            return None
+
+        async def fake_upsert_task(*args, **kwargs):
+            calls.append((args, kwargs))
+
+        payload = {
+            "issue": {
+                "id": "22771",
+                "key": "BILQ-2501",
+                "fields": {
+                    "summary": "[CL-D] Reservation Advanced Filters",
+                    "description": GENERATED_INSTRUCTIONS,
+                    "labels": ["Release1"],
+                    "components": [{"name": "business-facing-app"}],
+                    "project": {"key": "BILQ"},
+                    "issuetype": {"name": "Story"},
+                    "issuelinks": [
+                        {
+                            "id": "14495",
+                            "type": {"name": "Links", "outward": "Links"},
+                            "outwardIssue": {
+                                "key": "BILQ-2691",
+                                "fields": {"issuetype": {"name": "Bug"}},
+                            },
+                        },
+                        {
+                            "id": "14497",
+                            "type": {"name": "AgileTest", "outward": "tests", "inward": "is tested by"},
+                            "outwardIssue": {
+                                "id": "23048",
+                                "key": "BILQ-2595",
+                                "self": "https://billqode.atlassian.net/rest/api/3/issue/23048",
+                                "fields": {
+                                    "summary": "Verify Slot Filter Functionality",
+                                    "status": {"name": "Backlog"},
+                                    "priority": {"name": "Medium"},
+                                    "issuetype": {"name": "TestCase"},
+                                },
+                            },
+                        },
+                    ],
+                },
+            }
+        }
+
+        with (
+            patch.object(ingest_server, "INGEST_TOKEN", "test-token"),
+            patch.object(ingest_server.database, "get_task_status", fake_get_task_status),
+            patch.object(ingest_server.database, "upsert_task", fake_upsert_task),
+        ):
+            client = TestClient(ingest_server.app)
+            response = client.post(
+                "/ingest",
+                headers={"X-Ingest-Token": "test-token"},
+                json=payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        args, kwargs = calls[0]
+        self.assertEqual(args[0], "BILQ-2501")
+        self.assertEqual(args[1], "[CL-D] Reservation Advanced Filters")
+        self.assertEqual(kwargs["meta"]["project_key"], "BILQ")
+        self.assertEqual(kwargs["meta"]["issue_type"], "Story")
+        self.assertEqual(kwargs["meta"]["labels"], ["Release1"])
+        self.assertEqual(kwargs["meta"]["components"], ["business-facing-app"])
+        self.assertEqual(
+            kwargs["meta"]["jira_test_cases"],
+            [
+                {
+                    "key": "BILQ-2595",
+                    "id": "23048",
+                    "self": "https://billqode.atlassian.net/rest/api/3/issue/23048",
+                    "summary": "Verify Slot Filter Functionality",
+                    "status": "Backlog",
+                    "priority": "Medium",
+                    "issueType": "TestCase",
+                    "linkId": "14497",
+                    "linkType": "AgileTest",
+                    "linkDirection": "outward",
+                    "linkRelationship": "tests",
+                }
+            ],
+        )
+
     def test_ingest_accepts_instructions_and_stores_exact_task_fields(self) -> None:
         calls = []
 

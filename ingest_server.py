@@ -90,6 +90,92 @@ def _json_object_from_string(value: str | None) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _extract_jira_linked_test_cases(issue: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = issue.get("fields")
+    if not isinstance(fields, dict):
+        return []
+
+    test_cases: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for link in _list_of_objects(fields.get("issuelinks")):
+        link_type = link.get("type") if isinstance(link.get("type"), dict) else {}
+        if link_type.get("name") != "AgileTest":
+            continue
+
+        for direction, issue_key in (("outward", "outwardIssue"), ("inward", "inwardIssue")):
+            linked_issue = link.get(issue_key)
+            if not isinstance(linked_issue, dict):
+                continue
+            linked_fields = linked_issue.get("fields") if isinstance(linked_issue.get("fields"), dict) else {}
+            issue_type = linked_fields.get("issuetype") if isinstance(linked_fields.get("issuetype"), dict) else {}
+            if issue_type.get("name") != "TestCase":
+                continue
+
+            key = linked_issue.get("key")
+            if not isinstance(key, str) or key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            status = linked_fields.get("status") if isinstance(linked_fields.get("status"), dict) else {}
+            priority = linked_fields.get("priority") if isinstance(linked_fields.get("priority"), dict) else {}
+            test_cases.append(
+                {
+                    "key": key,
+                    "id": linked_issue.get("id"),
+                    "self": linked_issue.get("self"),
+                    "summary": linked_fields.get("summary"),
+                    "status": status.get("name"),
+                    "priority": priority.get("name"),
+                    "issueType": issue_type.get("name"),
+                    "linkId": link.get("id"),
+                    "linkType": link_type.get("name"),
+                    "linkDirection": direction,
+                    "linkRelationship": link_type.get(direction),
+                }
+            )
+    return test_cases
+
+
+def _normalize_jira_issue_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    issue = raw.get("issue") if isinstance(raw.get("issue"), dict) else raw
+    if not isinstance(issue, dict) or not isinstance(issue.get("fields"), dict):
+        return raw
+
+    fields = issue["fields"]
+    normalized = dict(raw)
+    normalized.setdefault("id", issue.get("key") or issue.get("id"))
+    normalized.setdefault("summary", fields.get("summary"))
+    normalized.setdefault("description", fields.get("description"))
+    normalized.setdefault("acceptance_criteria", fields.get("customfield_10037"))
+
+    issue_type = fields.get("issuetype")
+    if isinstance(issue_type, dict):
+        normalized.setdefault("issue_type", issue_type.get("name"))
+
+    project = fields.get("project")
+    meta = dict(normalized.get("meta") or {})
+    if isinstance(project, dict):
+        meta.setdefault("project_key", project.get("key"))
+    normalized["meta"] = meta
+
+    labels = fields.get("labels")
+    if labels is not None:
+        normalized.setdefault("labels", labels)
+
+    components = fields.get("components")
+    if isinstance(components, list):
+        normalized.setdefault(
+            "components",
+            [component.get("name") for component in components if isinstance(component, dict) and component.get("name")],
+        )
+
+    test_cases = _extract_jira_linked_test_cases(issue)
+    if test_cases:
+        normalized.setdefault("test_cases", test_cases)
+
+    return normalized
+
+
 class IngestTask(BaseModel):
     """Payload from n8n/HTTP. Unknown fields are ignored by design."""
     model_config = {"extra": "ignore"}
@@ -264,6 +350,7 @@ async def ingest(
             status_code=422,
             detail="Expected a JSON object or array with task (id, summary/title, source, instructions/description).",
         )
+    raw = _normalize_jira_issue_payload(raw)
 
     # Validate/normalize into our schema (gives good error messages).
     try:
