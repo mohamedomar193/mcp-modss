@@ -1,80 +1,78 @@
-# Full EC2 Deployment Guide — BillQode MCP Server
+# EC2 Deployment Guide — BillQode MCP Server
 
-Complete step-by-step guide to deploy the MCP server stack on an AWS EC2 instance.
-
-## What Gets Deployed
+## Architecture
 
 ```
-EC2 Instance (port 80)
-├── nginx          → reverse proxy (:80)
-│   ├── /mcp       → mcp-server (:8000)  — Cursor connects here
-│   └── /ingest    → ingest (:8787)      — n8n posts here
-├── mcp-server     → MCP tools + RAG + GPT-5 mini enhancement
-├── ingest         → webhook receiver (raw Jira data → PostgreSQL)
-└── postgres       → task storage (:5432)
+EC2 Instance
+├── nginx (host, port 80)
+│   ├── /mcp     → 127.0.0.1:3000  (MCP server — Cursor connects here)
+│   └── /ingest  → 127.0.0.1:3001  (ingest server — n8n posts here)
+├── Docker: mcp-server   (:3000)  — MCP tools + QA guidelines + Jira reporter
+├── Docker: ingest       (:3001)  — webhook receiver (Jira → PostgreSQL)
+└── Docker: postgres     (:5432)  — task + test_failures storage
 ```
+
+nginx runs **on the host** (not in Docker) and proxies to the two containers.
 
 ---
 
-## Step 1 — Launch EC2 Instance
+## Step 1 — Launch EC2
 
-1. Go to **AWS Console → EC2 → Launch Instance**
+1. **AWS Console → EC2 → Launch Instance**
 2. Settings:
-   - **AMI**: Amazon Linux 2023 or Ubuntu 22.04
-   - **Instance type**: `t3.small` (minimum) or `t3.medium` (recommended)
+   - **AMI**: Amazon Linux 2023 (recommended) or Ubuntu 22.04
+   - **Instance type**: `t3.small` minimum, `t3.medium` recommended
    - **Storage**: 20 GB gp3
-   - **Security Group**: open ports **22** (SSH) and **80** (HTTP)
-3. Download the key pair (`.pem` file)
+   - **Security Group**: open ports `22` (SSH) and `80` (HTTP)
+3. Download your `.pem` key pair
 
 ---
 
-## Step 2 — SSH into EC2
+## Step 2 — SSH into the Instance
 
 ```bash
 chmod 400 your-key.pem
 ssh -i your-key.pem ec2-user@YOUR_EC2_PUBLIC_IP
 ```
 
-(Use `ubuntu@` instead of `ec2-user@` if you chose Ubuntu.)
+> Use `ubuntu@` instead of `ec2-user@` on Ubuntu AMIs.
 
 ---
 
-## Step 3 — Install Docker & Docker Compose
+## Step 3 — Install Docker, Docker Compose, nginx, git
 
 **Amazon Linux 2023:**
 ```bash
 sudo yum update -y
-sudo yum install -y docker git
+sudo yum install -y docker git nginx
+
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker ec2-user
 
-# Install Docker Compose plugin
+# Docker Compose plugin
 sudo mkdir -p /usr/local/lib/docker/cli-plugins
 sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Re-login for group change
-exit
+exit   # re-login for group change
 ```
 
-SSH back in:
+SSH back in and verify:
 ```bash
-ssh -i your-key.pem ec2-user@YOUR_EC2_PUBLIC_IP
 docker --version
 docker compose version
+nginx -v
 ```
 
 **Ubuntu 22.04:**
 ```bash
-sudo apt update && sudo apt install -y docker.io docker-compose-v2 git
-sudo systemctl enable docker
+sudo apt update && sudo apt install -y docker.io docker-compose-v2 nginx git
+sudo systemctl enable docker nginx
 sudo usermod -aG docker ubuntu
 exit
 ```
-
-SSH back in and verify.
 
 ---
 
@@ -94,80 +92,115 @@ cp env.example .env
 nano .env
 ```
 
-Fill in your values:
+Fill in **all required values**:
+
 ```env
-POSTGRES_PASSWORD=your-strong-db-password-here
-INGEST_TOKEN=your-long-random-secret-here
-OPENAI_API_KEY=sk-proj-your-openai-key-here
+# Database password used by Docker containers
+POSTGRES_PASSWORD=use-a-strong-random-password
+
+# Webhook auth token — n8n sends this in X-Ingest-Token header
+INGEST_TOKEN=use-a-long-random-secret
+
+# OpenAI key for LLM task enhancement (optional — tasks work without it)
+OPENAI_API_KEY=sk-proj-...
+
+# Jira integration — required for report_failed_test MCP tool
+JIRA_BASE_URL=https://billqode.atlassian.net
+JIRA_PROJECT_KEY=BILQ
+JIRA_EMAIL=your-email@billqode.com
+JIRA_API_TOKEN=your-jira-api-token
 ```
 
-Save and exit (`Ctrl+X`, `Y`, `Enter`).
+> **Get a Jira API token:** https://id.atlassian.com/manage-profile/security/api-tokens
+>
+> `DATABASE_URL` is built automatically inside docker-compose from `POSTGRES_PASSWORD`. Do not set it manually.
 
-**Important**: `DATABASE_URL` is built automatically in `docker-compose.yml` from `POSTGRES_PASSWORD`. You do NOT need to set `DATABASE_URL` in `.env` for Docker deployment.
+Save and exit: `Ctrl+X` → `Y` → `Enter`
 
 ---
 
-## Step 6 — Build & Start
+## Step 6 — Configure nginx
+
+Copy the repo's nginx config to the host:
+
+```bash
+sudo cp nginx/nginx.conf /etc/nginx/nginx.conf
+sudo nginx -t          # verify config is valid
+sudo systemctl enable nginx
+sudo systemctl start nginx
+```
+
+The config proxies:
+- `http://YOUR_IP/mcp`    → `127.0.0.1:3000` (MCP server)
+- `http://YOUR_IP/ingest` → `127.0.0.1:3001` (ingest server)
+
+---
+
+## Step 7 — Build & Start Docker Containers
 
 ```bash
 docker compose build --no-cache
 docker compose up -d
 ```
 
-Wait ~30 seconds for PostgreSQL to initialize and create the `tasks` table.
+Wait ~20 seconds for PostgreSQL to start and run `01-schema.sql` (creates `tasks` and `test_failures` tables automatically).
 
 ---
 
-## Step 7 — Verify All Services
+## Step 8 — Verify Everything is Running
 
 ```bash
-# Check all 4 containers are running
+# All 3 containers should be Up
 docker compose ps
 ```
 
-Expected output:
+Expected:
 ```
 NAME                       STATUS
 mcp-server-postgres-1      Up (healthy)
-mcp-server-mcp-server-1    Up
+mcp-server-mcp-server-1    Up (healthy)
 mcp-server-ingest-1        Up (healthy)
-mcp-server-nginx-1         Up
 ```
 
 ```bash
-# Check ingest health
+# nginx must be active
+sudo systemctl status nginx
+```
+
+```bash
+# Ingest health check
 curl http://localhost/ingest/health
-# Expected: {"ok":true,"service":"ingest","storage":"postgres"}
+# → {"ok":true,"service":"ingest","storage":"postgres"}
 ```
 
 ```bash
-# Check MCP server responds
+# MCP tools list
 curl -X POST http://localhost/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_tasks","arguments":{"limit":5}}}'
-# Expected: JSON with "ok": true
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+# → JSON listing: list_tasks, get_task, enqueue_task, start_task, complete_task, fail_task, report_failed_test
 ```
 
 ---
 
-## Step 8 — Test Full Pipeline
+## Step 9 — Test the Full Pipeline
 
-### 8a. Ingest a test task
+### 9a — Ingest a task via webhook
 ```bash
 curl -X POST http://localhost/ingest \
   -H "Content-Type: application/json" \
   -H "X-Ingest-Token: YOUR_INGEST_TOKEN" \
   -d '{
     "id": "DEPLOY-TEST-001",
-    "summary": "Create Order CRUD API",
+    "summary": "Verify deployment works",
     "source": "jira",
-    "description": "Implement full CRUD endpoints for orders module with validation"
+    "description": "End-to-end deployment test task"
   }'
-# Expected: {"ok":true,"summary":"Wrote DEPLOY-TEST-001","path":null}
+# → {"ok":true,"summary":"Wrote DEPLOY-TEST-001","path":null}
 ```
 
-### 8b. Retrieve with RAG + LLM enhancement
+### 9b — Retrieve the task via MCP
 ```bash
 curl -X POST http://localhost/mcp \
   -H "Content-Type: application/json" \
@@ -175,19 +208,37 @@ curl -X POST http://localhost/mcp \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_task","arguments":{"task_id":"DEPLOY-TEST-001"}}}'
 ```
 
-You should see enhanced `instructions` (numbered steps following BillQode architecture), generated `acceptance_criteria`, and `file_hints`.
-
-### 8c. Clean up test task
+### 9c — Report a failed test (creates Jira bug)
 ```bash
 curl -X POST http://localhost/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"complete_task","arguments":{"task_id":"DEPLOY-TEST-001","note":"Deployment test passed"}}}'
+  -d '{
+    "jsonrpc":"2.0","id":3,"method":"tools/call",
+    "params":{
+      "name":"report_failed_test",
+      "arguments":{
+        "test_name": "BILQ-999: Login flow smoke test",
+        "failure_reason": "Element not found: getByRole button Login",
+        "severity": "High",
+        "story_key": "BILQ-100"
+      }
+    }
+  }'
+# → {"ok":true,"failure_id":1,"jira_issue_key":"BILQ-XXXX","jira_issue_url":"...","linked_to_story":"BILQ-100",...}
+```
+
+### 9d — Clean up test task
+```bash
+curl -X POST http://localhost/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"complete_task","arguments":{"task_id":"DEPLOY-TEST-001","note":"Deployment verified"}}}'
 ```
 
 ---
 
-## Step 9 — Connect Cursor
+## Step 10 — Connect Cursor
 
 In your project's `.cursor/mcp.json`:
 ```json
@@ -200,22 +251,26 @@ In your project's `.cursor/mcp.json`:
 }
 ```
 
-Then in Cursor: **Settings → MCP** → refresh tools. You should see `list_tasks`, `get_task`, `enqueue_task`, `start_task`, `complete_task`, `fail_task`.
+**Cursor → Settings → MCP → Refresh tools.**
+
+Available tools: `list_tasks`, `get_task`, `enqueue_task`, `start_task`, `complete_task`, `fail_task`, `report_failed_test`
+
+The QA Playwright guidelines are sent to Cursor automatically on connection (no tool call needed). Cursor will follow the Billqode locator priority rules, POM structure, and Chakra UI patterns for any test code it writes.
 
 ---
 
-## Step 10 — Connect n8n
+## Step 11 — Connect n8n
 
-In your n8n workflow, configure the HTTP Request node:
+Configure an HTTP Request node in your n8n workflow:
 
 | Setting | Value |
 |---------|-------|
 | Method | `POST` |
 | URL | `http://YOUR_EC2_PUBLIC_IP/ingest` |
-| Headers | `Content-Type: application/json` |
-| | `X-Ingest-Token: <your INGEST_TOKEN from .env>` |
+| Header | `Content-Type: application/json` |
+| Header | `X-Ingest-Token: <your INGEST_TOKEN>` |
 
-Payload (map Jira fields):
+Jira payload mapping:
 ```json
 {
   "id": "{{ $json.key }}",
@@ -236,74 +291,78 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
+nginx does not need to restart unless `nginx/nginx.conf` changed.
+
+---
+
+## Environment Variables Reference
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `POSTGRES_PASSWORD` | Yes | PostgreSQL password for all containers |
+| `INGEST_TOKEN` | Yes | Bearer token for the `/ingest` webhook endpoint |
+| `OPENAI_API_KEY` | No | GPT-5 mini key for LLM task enhancement. Omit for raw tasks |
+| `JIRA_BASE_URL` | For Jira | Your Atlassian URL, e.g. `https://billqode.atlassian.net` |
+| `JIRA_PROJECT_KEY` | For Jira | Project key, e.g. `BILQ` |
+| `JIRA_EMAIL` | For Jira | Email address linked to the API token |
+| `JIRA_API_TOKEN` | For Jira | Jira API token from https://id.atlassian.com |
+
 ---
 
 ## Troubleshooting
 
-### Check logs
+### View logs
 ```bash
 docker compose logs mcp-server --tail=50
 docker compose logs ingest --tail=50
-docker compose logs postgres --tail=50
-docker compose logs nginx --tail=20
+docker compose logs postgres --tail=20
+sudo journalctl -u nginx --no-pager -n 30
 ```
 
-### LLM enhancement not working
+### Jira bugs not being created
 ```bash
-# Verify OPENAI_API_KEY is set in mcp-server container
-docker compose exec mcp-server env | grep OPENAI
+# Verify env vars reached the container
+docker compose exec mcp-server env | grep JIRA
 
-# Check for errors
-docker compose logs mcp-server | grep -i "llm\|openai\|error"
+# Check mcp-server logs for Jira errors
+docker compose logs mcp-server | grep -i "jira\|error"
 ```
 
-If `OPENAI_API_KEY` is empty, tasks are returned without enhancement (graceful fallback).
-
-### Database connection issues
+### Database issues
 ```bash
-# Check postgres is healthy
+# Check postgres health
 docker compose ps postgres
 
-# Connect to database manually
-docker compose exec postgres psql -U postgres -d mcp_tasks -c "SELECT count(*) FROM tasks;"
+# Manual query
+docker compose exec postgres psql -U postgres -d mcp_tasks \
+  -c "SELECT count(*) FROM tasks; SELECT count(*) FROM test_failures;"
 ```
 
-### Reset database (destructive — deletes all tasks)
+### nginx not proxying
 ```bash
-docker compose down -v    # removes volumes including postgres data
-docker compose up -d      # fresh start, 01-schema.sql runs again
+sudo nginx -t                   # validate config
+sudo systemctl restart nginx
+curl -v http://localhost/mcp    # check upstream connection
+```
+
+### Reset database (destructive)
+```bash
+docker compose down -v    # removes postgres volume — all data lost
+docker compose up -d      # fresh start, schema recreated automatically
 ```
 
 ---
 
-## Environment Variables
+## Database Tables
 
-| Variable | Required | Where Used | Description |
-|----------|----------|------------|-------------|
-| `POSTGRES_PASSWORD` | Yes | postgres, mcp-server, ingest | Database password |
-| `INGEST_TOKEN` | Yes | ingest | Webhook auth token (X-Ingest-Token header) |
-| `OPENAI_API_KEY` | No | mcp-server | GPT-5 mini key for RAG enhancement. If empty, raw tasks returned |
+```sql
+-- Task queue (created by n8n/Jira ingest)
+tasks (id, source, title, instructions, acceptance_criteria, file_hints, meta,
+       status, created_at, started_at, completed_at, failed_at,
+       completion_note, failure_reason, updated_at, previous_status)
 
----
-
-## Architecture Flow
-
-```
-Jira Issue
-   ↓
-n8n Webhook (POST /ingest + X-Ingest-Token)
-   ↓
-nginx (:80) → ingest (:8787)
-   ↓
-PostgreSQL (raw task data stored)
-   ↓
-Cursor calls get_task via MCP
-   ↓
-nginx (:80) → mcp-server (:8000)
-   ↓
-RAG: keyword-match ticket → select relevant architecture docs
-   ↓
-GPT-5 mini: Core Policy + matched docs → enhanced instructions
-   ↓
-Enhanced task returned to Cursor
+-- Playwright test failure reports (created by report_failed_test tool)
+test_failures (id, task_id, test_name, failure_reason, severity,
+               screenshot_path, video_path, logs,
+               jira_issue_key, jira_issue_url, created_at)
 ```

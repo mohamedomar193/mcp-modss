@@ -239,6 +239,49 @@ async def task_exists(task_id: str) -> bool:
     return row is not None
 
 
+async def insert_test_failure(
+    test_name: str,
+    failure_reason: str | None = None,
+    task_id: str | None = None,
+    severity: str = "Medium",
+    screenshot_path: str | None = None,
+    video_path: str | None = None,
+    logs: str | None = None,
+) -> int:
+    """Insert a test failure record. Returns the generated serial id."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """
+        INSERT INTO test_failures (task_id, test_name, failure_reason, severity, screenshot_path, video_path, logs)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        """,
+        task_id,
+        test_name,
+        failure_reason,
+        severity,
+        screenshot_path,
+        video_path,
+        logs,
+    )
+    return row["id"]
+
+
+async def update_test_failure_jira(
+    failure_id: int,
+    jira_issue_key: str,
+    jira_issue_url: str,
+) -> None:
+    """Backfill Jira key and URL after issue creation."""
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE test_failures SET jira_issue_key = $1, jira_issue_url = $2 WHERE id = $3",
+        jira_issue_key,
+        jira_issue_url,
+        failure_id,
+    )
+
+
 async def get_task_status(task_id: str) -> TaskStatus | None:
     """Return current status or None if task not found."""
     pool = await get_pool()
