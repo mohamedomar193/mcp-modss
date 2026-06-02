@@ -312,7 +312,7 @@ async def _create_jira_issue(
 
 
 async def _attach_file_to_jira(issue_key: str, file_path: str) -> dict[str, Any]:
-    """Attach a file to a Jira issue. Returns info dict or raises on error."""
+    """Attach a file to a Jira issue by server-side path. Returns info dict or raises on error."""
     p = Path(file_path)
     if not p.exists():
         raise FileNotFoundError(f"Attachment not found: {file_path}")
@@ -334,6 +334,35 @@ async def _attach_file_to_jira(issue_key: str, file_path: str) -> dict[str, Any]
         raise RuntimeError(f"Attachment upload failed [{resp.status_code}]: {resp.text}")
 
     return {"file": p.name, "ok": True}
+
+
+async def _attach_bytes_to_jira(
+    issue_key: str,
+    filename: str,
+    content_b64: str,
+) -> dict[str, Any]:
+    """Attach a file to a Jira issue from base64-encoded content. Used for client-side files."""
+    try:
+        raw = base64.b64decode(content_b64)
+    except Exception as exc:
+        raise ValueError(f"Invalid base64 content for {filename}: {exc}")
+
+    headers = {
+        "Authorization": _jira_auth_headers()["Authorization"],
+        "X-Atlassian-Token": "no-check",
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}/attachments",
+            headers=headers,
+            files={"file": (filename, raw, "application/octet-stream")},
+        )
+
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Attachment upload failed [{resp.status_code}]: {resp.text}")
+
+    return {"file": filename, "ok": True}
 
 
 async def _link_jira_issues(
@@ -591,6 +620,65 @@ async def report_failed_test(
         "linked_to_story": linked_to_story,
         "attachments": attachments,
         "error": {"detail": jira_error} if jira_error else None,
+    }, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="attach_to_jira_bug",
+    description=(
+        "Attach one or more local files to an existing Jira issue. "
+        "Use this when report_failed_test could not attach files because they are on the local machine. "
+        "Read each file as bytes, base64-encode it, and pass it in the 'files' list. "
+        "Each entry must have: 'filename' (just the file name, no path) and 'content_b64' (base64-encoded file bytes). "
+        "Example: attach a screenshot and video to BILQ-123 after a test failure."
+    ),
+)
+async def attach_to_jira_bug(
+    issue_key: str,
+    files: list[dict[str, str]],
+) -> str:
+    """
+    Attach local files to a Jira issue.
+
+    files: list of {"filename": "test-failed-1.png", "content_b64": "<base64 bytes>"}
+    """
+    if not (JIRA_BASE_URL and JIRA_EMAIL and JIRA_API_TOKEN):
+        return json.dumps({
+            "ok": False,
+            "summary": "Jira env vars not configured.",
+            "attachments": [],
+            "error": {"type": "config_error"},
+        }, ensure_ascii=False)
+
+    if not files:
+        return json.dumps({
+            "ok": False,
+            "summary": "No files provided.",
+            "attachments": [],
+            "error": {"type": "no_files"},
+        }, ensure_ascii=False)
+
+    results: list[dict] = []
+    for entry in files:
+        filename = entry.get("filename", "attachment")
+        content_b64 = entry.get("content_b64", "")
+        try:
+            info = await _attach_bytes_to_jira(issue_key, filename, content_b64)
+            results.append(info)
+        except Exception as exc:
+            results.append({"file": filename, "ok": False, "error": str(exc)})
+
+    succeeded = [r for r in results if r.get("ok")]
+    failed = [r for r in results if not r.get("ok")]
+    summary = f"Attached {len(succeeded)}/{len(files)} file(s) to {issue_key}."
+    if failed:
+        summary += f" {len(failed)} failed."
+
+    return json.dumps({
+        "ok": len(failed) == 0,
+        "summary": summary,
+        "attachments": results,
+        "error": None if not failed else {"type": "partial_failure", "failed": failed},
     }, ensure_ascii=False)
 
 
