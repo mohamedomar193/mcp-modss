@@ -514,11 +514,20 @@ async def fail_task(task_id: str, *, reason: str | None = None) -> str:
 @mcp.tool(
     name="report_failed_test",
     description=(
-        "Report a failed Playwright test. Stores the failure in PostgreSQL and automatically creates a Jira Bug "
+        "Report a failed Playwright test. Stores the failure in PostgreSQL and creates a Jira Bug "
         "with the failure details, priority based on severity, and labels=['automated-test','test-failure']. "
-        "If story_key is provided (e.g. 'BILQ-42'), the bug is linked to that story via 'relates to' and inherits "
-        "its Jira component (board assignment). Screenshots and videos are attached to the Jira issue. "
-        "The DB record is always created even if Jira is unavailable."
+        "If story_key is provided (e.g. 'BILQ-42'), the bug is linked to that story via 'relates to' and "
+        "inherits its Jira component (board assignment). "
+        "\n\n"
+        "ATTACHMENTS: The MCP server runs on a remote machine and cannot read local file paths. "
+        "To attach files, read each file from disk and pass its content as base64: "
+        "use screenshot_filename + screenshot_b64 for screenshots, "
+        "and video_filename + video_b64 for videos. "
+        "Example: screenshot_filename='test-failed-1.png', screenshot_b64=<base64 of file bytes>. "
+        "Pass screenshot_path only for informational storage in the DB (not used for upload). "
+        "\n\n"
+        "The DB record is always created even if Jira is unavailable. "
+        "On attachment failure the Jira issue key is still returned so you can retry with attach_to_jira_bug."
     ),
 )
 async def report_failed_test(
@@ -527,7 +536,11 @@ async def report_failed_test(
     task_id: str | None = None,
     story_key: str | None = None,
     screenshot_path: str | None = None,
+    screenshot_filename: str | None = None,
+    screenshot_b64: str | None = None,
     video_path: str | None = None,
+    video_filename: str | None = None,
+    video_b64: str | None = None,
     logs: str | None = None,
     severity: str = "Medium",
 ) -> str:
@@ -591,16 +604,20 @@ async def report_failed_test(
         except Exception as exc:
             jira_error = (jira_error or "") + f" | Link failed: {exc}"
 
-    # 4. Attach files
+    # 4. Attach files via base64 content (works from any client OS)
     if jira_key:
-        for label, path in [("screenshot", screenshot_path), ("video", video_path)]:
-            if not path:
+        for label, filename, b64 in [
+            ("screenshot", screenshot_filename, screenshot_b64),
+            ("video", video_filename, video_b64),
+        ]:
+            if not b64:
                 continue
+            fname = filename or label
             try:
-                info = await _attach_file_to_jira(jira_key, path)
+                info = await _attach_bytes_to_jira(jira_key, fname, b64)
                 attachments.append({"type": label, **info})
             except Exception as exc:
-                attachments.append({"type": label, "file": path, "ok": False, "error": str(exc)})
+                attachments.append({"type": label, "file": fname, "ok": False, "error": str(exc)})
 
     ok = jira_key is not None if jira_configured else True
     summary_parts = [f"Recorded failure #{failure_id} for '{test_name}'."]
