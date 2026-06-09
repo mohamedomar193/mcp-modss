@@ -519,15 +519,16 @@ async def fail_task(task_id: str, *, reason: str | None = None) -> str:
         "If story_key is provided (e.g. 'BILQ-42'), the bug is linked to that story via 'relates to' and "
         "inherits its Jira component (board assignment). "
         "\n\n"
-        "ATTACHMENTS: The MCP server runs on a remote machine and cannot read local file paths. "
-        "To attach files, read each file from disk and pass its content as base64: "
-        "use screenshot_filename + screenshot_b64 for screenshots, "
-        "and video_filename + video_b64 for videos. "
-        "Example: screenshot_filename='test-failed-1.png', screenshot_b64=<base64 of file bytes>. "
-        "Pass screenshot_path only for informational storage in the DB (not used for upload). "
+        "ATTACHMENTS — REQUIRED STEPS (the MCP server is remote and cannot read local paths): "
+        "1. For each file you want to attach (screenshot, video, etc.), read its raw bytes from disk. "
+        "2. Base64-encode those bytes (standard base64, no line breaks). "
+        "3. Pass them in the 'attachments' list, e.g.: "
+        '   attachments=[{"filename": "test-failed-1.png", "content_b64": "<base64 string>"}]. '
+        "Do NOT pass file paths — they will be ignored. If you skip base64 encoding no files are attached. "
         "\n\n"
-        "The DB record is always created even if Jira is unavailable. "
-        "On attachment failure the Jira issue key is still returned so you can retry with attach_to_jira_bug."
+        "The DB record is always written first. "
+        "If Jira is down the failure is still saved and jira_issue_key will be null. "
+        "If an attachment fails its error is reported per-file; the Jira issue key is always returned for retry."
     ),
 )
 async def report_failed_test(
@@ -535,19 +536,22 @@ async def report_failed_test(
     failure_reason: str,
     task_id: str | None = None,
     story_key: str | None = None,
-    screenshot_path: str | None = None,
-    screenshot_filename: str | None = None,
-    screenshot_b64: str | None = None,
-    video_path: str | None = None,
-    video_filename: str | None = None,
-    video_b64: str | None = None,
+    attachments: list[dict[str, str]] | None = None,
     logs: str | None = None,
     severity: str = "Medium",
 ) -> str:
+    """
+    attachments: optional list of {"filename": "test-failed-1.png", "content_b64": "<base64>"}
+    """
     # Normalize severity
     severity = severity.strip().capitalize()
     if severity.lower() not in _VALID_SEVERITIES:
         severity = "Medium"
+
+    # Derive screenshot/video paths for DB storage from attachment filenames (informational only)
+    attach_list = attachments or []
+    screenshot_path = next((a.get("filename") for a in attach_list if "screenshot" in a.get("filename", "").lower() or "png" in a.get("filename", "").lower()), None)
+    video_path = next((a.get("filename") for a in attach_list if "video" in a.get("filename", "").lower() or "webm" in a.get("filename", "").lower() or "mp4" in a.get("filename", "").lower()), None)
 
     # 1. Insert DB record first (survives Jira outages)
     try:
@@ -575,7 +579,7 @@ async def report_failed_test(
     jira_key: str | None = None
     jira_url: str | None = None
     linked_to_story: str | None = None
-    attachments: list[dict] = []
+    attachment_results: list[dict] = []
     jira_error: str | None = None
 
     # 2. Create Jira bug
@@ -604,39 +608,42 @@ async def report_failed_test(
         except Exception as exc:
             jira_error = (jira_error or "") + f" | Link failed: {exc}"
 
-    # 4. Attach files via base64 content (works from any client OS)
-    if jira_key:
-        for label, filename, b64 in [
-            ("screenshot", screenshot_filename, screenshot_b64),
-            ("video", video_filename, video_b64),
-        ]:
+    # 4. Attach files via base64 content (content read by Cursor locally, encoded before sending)
+    if jira_key and attach_list:
+        for entry in attach_list:
+            filename = entry.get("filename") or "attachment"
+            b64 = entry.get("content_b64", "")
             if not b64:
+                attachment_results.append({"file": filename, "ok": False, "error": "content_b64 is empty — file was not base64-encoded before calling this tool"})
                 continue
-            fname = filename or label
             try:
-                info = await _attach_bytes_to_jira(jira_key, fname, b64)
-                attachments.append({"type": label, **info})
+                info = await _attach_bytes_to_jira(jira_key, filename, b64)
+                attachment_results.append(info)
             except Exception as exc:
-                attachments.append({"type": label, "file": fname, "ok": False, "error": str(exc)})
+                attachment_results.append({"file": filename, "ok": False, "error": str(exc)})
 
     ok = jira_key is not None if jira_configured else True
+    succeeded = [r for r in attachment_results if r.get("ok")]
+    failed_attach = [r for r in attachment_results if not r.get("ok")]
     summary_parts = [f"Recorded failure #{failure_id} for '{test_name}'."]
     if jira_key:
         summary_parts.append(f"Jira bug: {jira_key}.")
     if linked_to_story:
         summary_parts.append(f"Linked to {linked_to_story}.")
+    if attach_list:
+        summary_parts.append(f"Attachments: {len(succeeded)}/{len(attach_list)} uploaded.")
     if jira_error and not jira_key:
         summary_parts.append(f"Jira error: {jira_error}")
 
     return json.dumps({
-        "ok": ok,
+        "ok": ok and len(failed_attach) == 0,
         "summary": " ".join(summary_parts),
         "failure_id": failure_id,
         "jira_issue_key": jira_key,
         "jira_issue_url": jira_url,
         "linked_to_story": linked_to_story,
-        "attachments": attachments,
-        "error": {"detail": jira_error} if jira_error else None,
+        "attachments": attachment_results,
+        "error": {"detail": jira_error, "failed_attachments": failed_attach} if (jira_error or failed_attach) else None,
     }, ensure_ascii=False)
 
 
