@@ -181,6 +181,68 @@ def _jira_auth_headers() -> dict[str, str]:
     }
 
 
+def _jira_doc_to_text(value: Any) -> str:
+    """Flatten an Atlassian Document Format (ADF) field into plain text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for part in (_jira_doc_to_text(item) for item in value) if part)
+    if isinstance(value, dict):
+        text = value.get("text")
+        if isinstance(text, str):
+            return text
+        content = value.get("content")
+        if isinstance(content, list):
+            return "\n".join(part for part in (_jira_doc_to_text(item) for item in content) if part)
+    return ""
+
+
+async def _fetch_jira_test_case_details(key: str) -> dict[str, Any] | None:
+    """Fetch a single Jira TestCase issue and return its full detail fields (steps, preconditions, description)."""
+    if not (JIRA_BASE_URL and JIRA_EMAIL and JIRA_API_TOKEN):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{JIRA_BASE_URL}/rest/api/3/issue/{key}",
+                headers=_jira_auth_headers(),
+            )
+        if resp.status_code != 200:
+            return None
+        fields = resp.json().get("fields") or {}
+    except Exception:
+        return None
+
+    status = fields.get("status") if isinstance(fields.get("status"), dict) else {}
+    priority = fields.get("priority") if isinstance(fields.get("priority"), dict) else {}
+    assignee = fields.get("assignee") if isinstance(fields.get("assignee"), dict) else {}
+    labels = fields.get("labels") if isinstance(fields.get("labels"), list) else []
+
+    return {
+        "description": _jira_doc_to_text(fields.get("description")),
+        "status": status.get("name"),
+        "priority": priority.get("name"),
+        "assignee": assignee.get("displayName"),
+        "labels": labels,
+        "url": f"{JIRA_BASE_URL}/browse/{key}",
+    }
+
+
+async def _enrich_test_cases_with_details(test_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach full Jira detail (description/steps, status, priority, assignee) to each linked test case."""
+    enriched: list[dict[str, Any]] = []
+    for tc in test_cases:
+        tc = dict(tc)
+        key = tc.get("key")
+        details = await _fetch_jira_test_case_details(key) if isinstance(key, str) else None
+        if details is not None:
+            tc["details"] = details
+        enriched.append(tc)
+    return enriched
+
+
 def _map_severity_to_priority(severity: str) -> str:
     return {
         "critical": "Highest",
@@ -410,7 +472,9 @@ async def list_tasks(
     name="get_task",
     description=(
         "Get a single queued task by id (or filename stem) from the local tasks inbox. "
-        "Returns the full structured task JSON as text so the agent can generate a patch from it."
+        "Returns the full structured task JSON as text so the agent can generate a patch from it. "
+        "If the task has linked Jira test cases (meta.jira_test_cases), each one is enriched with its "
+        "full Jira details (description/steps, status, priority, assignee, url) under a 'details' key."
     ),
 )
 async def get_task(task_id: str) -> str:
@@ -420,6 +484,11 @@ async def get_task(task_id: str) -> str:
             {"ok": False, "summary": f"Task not found: {task_id}", "task": None, "error": {"type": "not_found"}},
             ensure_ascii=False,
         )
+
+    meta = task.get("meta") if isinstance(task.get("meta"), dict) else None
+    test_cases = meta.get("jira_test_cases") if meta else None
+    if isinstance(test_cases, list) and test_cases:
+        meta["jira_test_cases"] = await _enrich_test_cases_with_details(test_cases)
 
     return json.dumps({"ok": True, "summary": f"Loaded task {task['id']}.", "task": task, "error": None}, ensure_ascii=False)
 
